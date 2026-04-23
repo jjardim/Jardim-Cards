@@ -132,10 +132,13 @@ export default function CardDetailScreen() {
 
   const chartData = useMemo(() => {
     if (chronoSold.length > 0) {
+      // Let the chart-level `dataPointsColor` drive the dot color — per-item
+      // `dataPointColor` previously hardcoded green, which matched the line
+      // color and made the dots invisible. Tappable dots are the whole point
+      // of this chart, so we want them to contrast with the trend line.
       return chronoSold.map((s) => ({
         value: s.priceCents / 100,
         label: "",
-        dataPointColor: "#10b981",
       }));
     }
     return priceHistory
@@ -335,7 +338,11 @@ export default function CardDetailScreen() {
               curved
               yAxisOffset={yOffset}
               yAxisTextStyle={{ fontSize: 10, color: palette.textSubtle }}
-              yAxisLabelPrefix="$"
+              yAxisLabelWidth={64}
+              formatYLabel={(label) => {
+                const num = Math.round(parseFloat(label));
+                return Number.isFinite(num) ? `$${num.toLocaleString("en-US")}` : label;
+              }}
               yAxisColor="transparent"
               xAxisColor="transparent"
               noOfSections={4}
@@ -348,14 +355,15 @@ export default function CardDetailScreen() {
               areaChart
               isAnimated
               animationDuration={800}
-              dataPointsRadius={chronoSold.length > 0 ? 4 : 0}
-              dataPointsColor={chartColor}
+              hideDataPoints={chronoSold.length === 0}
+              dataPointsRadius={4}
+              dataPointsColor={palette.heroDark}
+              dataPointsShape="circular"
               focusEnabled={chronoSold.length > 0}
-              showDataPointOnFocus
               showStripOnFocus
               stripColor={palette.borderSoft}
               stripWidth={1}
-              focusedDataPointRadius={7}
+              focusedDataPointRadius={8}
               focusedDataPointColor={palette.heroDark}
               onFocus={(_item: { value: number }, index: number) => {
                 if (index >= 0 && index < chronoSold.length) {
