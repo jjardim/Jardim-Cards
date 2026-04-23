@@ -22,9 +22,43 @@ import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
 import { router } from "expo-router";
 import type { PortfolioCard } from "@/lib/types";
-import type { PortfolioValuation, SoldListing, ActiveListing } from "@/lib/api";
+import type { PortfolioValuation, SoldListing } from "@/lib/api";
+import { palette, radius, shadow, getSportTheme } from "@/lib/theme";
+import { PLBar } from "@/components/PLBar";
 
-const TREND_COLORS = { green: "#22c55e", red: "#ef4444", gray: "#a1a1aa" } as const;
+const TREND_COLORS = { green: palette.success, red: palette.danger, gray: palette.textSubtle } as const;
+
+function PortfolioStat({
+  label,
+  subtitle,
+  children,
+}: {
+  label: string;
+  subtitle?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <View
+      style={{
+        flex: 1,
+        backgroundColor: palette.surface,
+        borderRadius: radius.lg,
+        padding: 16,
+        ...shadow.sm,
+      }}
+    >
+      <Text
+        style={{ fontSize: 11, color: palette.textMuted, fontWeight: "700", letterSpacing: 0.4 }}
+      >
+        {label}
+      </Text>
+      {children}
+      {subtitle && (
+        <Text style={{ fontSize: 11, color: palette.textSubtle, marginTop: 4 }}>{subtitle}</Text>
+      )}
+    </View>
+  );
+}
 
 function PortfolioCardRow({
   card,
@@ -82,13 +116,15 @@ function PortfolioCardRow({
 
   const maxHeight = height.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 180],
+    outputRange: [0, 240],
   });
 
   const marginBottom = height.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 8],
+    outputRange: [0, 12],
   });
+
+  const sportTheme = getSportTheme(card.sport);
 
   const paidCents = card.purchase_price_cents * card.quantity;
   const currentCents = valuation ? valuation.currentValueCents * card.quantity : null;
@@ -119,46 +155,107 @@ function PortfolioCardRow({
       }}
     >
       <TouchableOpacity
-        activeOpacity={0.7}
+        activeOpacity={0.75}
         onPress={() => onPress(card)}
         style={{
-          backgroundColor: "#fff",
-          borderRadius: 12,
+          backgroundColor: palette.surface,
+          borderRadius: radius.lg,
           padding: 14,
-          borderWidth: 1,
-          borderColor: "#e4e4e7",
+          overflow: "hidden",
+          ...shadow.sm,
         }}
       >
-        {/* Top row: image + info + remove */}
-        <View style={{ flexDirection: "row", alignItems: "center" }}>
-          <View style={{ marginRight: 12 }}>
-            <CardImage
-              imageUrl={card.image_url}
-              playerName={card.player_name}
-              setName={card.set_name}
-              year={card.year}
-              width={48}
-              height={67}
-            />
-          </View>
-          <View style={{ flex: 1, marginRight: 8 }}>
-            <Text style={{ fontSize: 15, fontWeight: "600", color: "#18181b" }}>
+        {/* Thin sport-colored accent bar on the left edge */}
+        <View
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 3,
+            backgroundColor: sportTheme.color,
+          }}
+        />
+
+        {/* Top row: image + info + sport badge */}
+        <View style={{ flexDirection: "row", alignItems: "flex-start" }}>
+          <CardImage
+            imageUrl={card.image_url}
+            playerName={card.player_name}
+            setName={card.set_name}
+            year={card.year}
+            width={52}
+            height={73}
+            borderRadius={6}
+          />
+          <View style={{ flex: 1, marginLeft: 12, marginRight: 8 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              <Text style={{ fontSize: 10 }}>{sportTheme.emoji}</Text>
+              <Text
+                style={{ fontSize: 10, color: palette.textSubtle, fontWeight: "700", letterSpacing: 0.3 }}
+              >
+                {(card.set_name ?? "CARD").toUpperCase()}
+                {card.year ? ` \u00B7 ${card.year}` : ""}
+              </Text>
+            </View>
+            <Text
+              style={{ fontSize: 15, fontWeight: "700", color: palette.text, marginTop: 2 }}
+              numberOfLines={1}
+            >
               {card.player_name}
             </Text>
-            <Text style={{ fontSize: 13, color: "#71717a", marginTop: 2 }}>
-              {card.set_name ?? card.card_name} {card.year ? `(${card.year})` : ""}{" "}
-              {card.card_number ? `#${card.card_number}` : ""}
-            </Text>
-            <View style={{ flexDirection: "row", gap: 12, marginTop: 4 }}>
-              <Text style={{ fontSize: 13, color: "#71717a" }}>
-                Paid:{" "}
-                <Text style={{ fontWeight: "600", color: "#18181b" }}>
-                  {formatCents(card.purchase_price_cents)}
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+              <View
+                style={{
+                  backgroundColor: palette.bgMuted,
+                  paddingHorizontal: 8,
+                  paddingVertical: 3,
+                  borderRadius: radius.pill,
+                }}
+              >
+                <Text style={{ fontSize: 11, color: palette.textMuted, fontWeight: "600" }}>
+                  Paid {formatCents(card.purchase_price_cents)}
                 </Text>
-              </Text>
-              <Text style={{ fontSize: 13, color: "#71717a" }}>Qty: {card.quantity}</Text>
+              </View>
+              <View
+                style={{
+                  backgroundColor: palette.bgMuted,
+                  paddingHorizontal: 8,
+                  paddingVertical: 3,
+                  borderRadius: radius.pill,
+                }}
+              >
+                <Text style={{ fontSize: 11, color: palette.textMuted, fontWeight: "600" }}>
+                  Qty {card.quantity}
+                </Text>
+              </View>
               {card.grade && (
-                <Text style={{ fontSize: 13, color: "#71717a" }}>{card.grade}</Text>
+                <View
+                  style={{
+                    backgroundColor: palette.primaryBg,
+                    paddingHorizontal: 8,
+                    paddingVertical: 3,
+                    borderRadius: radius.pill,
+                  }}
+                >
+                  <Text style={{ fontSize: 11, color: palette.primary, fontWeight: "700" }}>
+                    {card.grade}
+                  </Text>
+                </View>
+              )}
+              {card.card_number && (
+                <View
+                  style={{
+                    backgroundColor: palette.bgMuted,
+                    paddingHorizontal: 8,
+                    paddingVertical: 3,
+                    borderRadius: radius.pill,
+                  }}
+                >
+                  <Text style={{ fontSize: 11, color: palette.textMuted, fontWeight: "600" }}>
+                    #{card.card_number}
+                  </Text>
+                </View>
               )}
             </View>
           </View>
@@ -168,8 +265,16 @@ function PortfolioCardRow({
               handleRemove();
             }}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: radius.pill,
+              backgroundColor: palette.dangerBg,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
           >
-            <Text style={{ color: "#ef4444", fontSize: 13, fontWeight: "600" }}>Remove</Text>
+            <FontAwesome name="times" size={11} color={palette.danger} />
           </TouchableOpacity>
         </View>
 
@@ -193,90 +298,154 @@ function PortfolioCardRow({
             }
           }}
           style={{
-            marginTop: 10,
-            paddingTop: 10,
+            marginTop: 12,
+            paddingTop: 12,
             borderTopWidth: 1,
-            borderTopColor: "#f4f4f5",
-            flexDirection: "row",
-            alignItems: "center",
-            justifyContent: "space-between",
+            borderTopColor: palette.borderSoft,
           }}
         >
           {valuationLoading ? (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-              <ActivityIndicator size="small" color="#a1a1aa" />
-              <Text style={{ fontSize: 11, color: "#a1a1aa" }}>Checking market...</Text>
+              <ActivityIndicator size="small" color={palette.textSubtle} />
+              <Text style={{ fontSize: 11, color: palette.textMuted }}>Checking market...</Text>
             </View>
           ) : valuation ? (
             <>
-              {/* Current value */}
-              <View>
-                <Text style={{ fontSize: 11, color: "#a1a1aa", fontWeight: "500" }}>
-                  Market Value
-                </Text>
-                <Text style={{ fontSize: 15, fontWeight: "700", color: "#18181b", marginTop: 1 }}>
-                  {formatCents(valuation.currentValueCents)}
-                </Text>
-              </View>
-
-              {/* P/L */}
-              <View style={{ alignItems: "center" }}>
-                <Text style={{ fontSize: 11, color: "#a1a1aa", fontWeight: "500" }}>
-                  P/L
-                </Text>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 1 }}>
-                  <FontAwesome
-                    name={plCents !== null && plCents >= 0 ? "arrow-up" : "arrow-down"}
-                    size={10}
-                    color={plColor}
-                  />
-                  <Text style={{ fontSize: 14, fontWeight: "700", color: plColor }}>
-                    {plCents !== null ? formatCents(Math.abs(plCents)) : "—"}
+              {/* Big-number row */}
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "flex-end",
+                  justifyContent: "space-between",
+                  marginBottom: 10,
+                }}
+              >
+                <View>
+                  <Text
+                    style={{ fontSize: 10, color: palette.textSubtle, fontWeight: "700", letterSpacing: 0.3 }}
+                  >
+                    MARKET VALUE
+                  </Text>
+                  <Text
+                    style={{
+                      fontSize: 20,
+                      fontWeight: "700",
+                      color: palette.text,
+                      marginTop: 2,
+                      letterSpacing: -0.4,
+                    }}
+                  >
+                    {formatCents(valuation.currentValueCents)}
                   </Text>
                 </View>
-                {plPct !== null && (
-                  <Text style={{ fontSize: 10, color: plColor, fontWeight: "500" }}>
-                    {plPct >= 0 ? "+" : ""}{plPct.toFixed(1)}%
+                <View style={{ alignItems: "flex-end" }}>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 4,
+                      backgroundColor: plCents !== null && plCents >= 0 ? palette.successBg : palette.dangerBg,
+                      paddingHorizontal: 8,
+                      paddingVertical: 3,
+                      borderRadius: radius.pill,
+                    }}
+                  >
+                    <FontAwesome
+                      name={plCents !== null && plCents >= 0 ? "arrow-up" : "arrow-down"}
+                      size={9}
+                      color={plColor}
+                    />
+                    <Text style={{ fontSize: 12, fontWeight: "700", color: plColor }}>
+                      {plCents !== null ? formatCents(Math.abs(plCents)) : "\u2014"}
+                    </Text>
+                    {plPct !== null && (
+                      <Text style={{ fontSize: 11, fontWeight: "700", color: plColor }}>
+                        ({plPct >= 0 ? "+" : ""}
+                        {plPct.toFixed(1)}%)
+                      </Text>
+                    )}
+                  </View>
+                </View>
+              </View>
+
+              {/* P/L progress bar */}
+              <PLBar pct={plPct} />
+
+              {/* Bottom row: 30d trend + sparkline */}
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginTop: 10,
+                }}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <Text style={{ fontSize: 11, color: palette.textSubtle, fontWeight: "600" }}>
+                    30d
                   </Text>
-                )}
-              </View>
-
-              {/* 30d trend */}
-              <View style={{ alignItems: "center" }}>
-                <Text style={{ fontSize: 11, color: "#a1a1aa", fontWeight: "500" }}>
-                  30d Trend
-                </Text>
-                <Text
-                  style={{
-                    fontSize: 13,
-                    fontWeight: "600",
-                    color: TREND_COLORS[trendColor(trendPct)],
-                    marginTop: 1,
-                  }}
-                >
-                  {formatPct(trendPct)}
-                </Text>
-              </View>
-
-              {/* Sparkline + tap hint */}
-              <View style={{ alignItems: "flex-end" }}>
-                <Text style={{ fontSize: 11, color: "#a1a1aa", fontWeight: "500", marginBottom: 3 }}>
-                  Sales ({valuation.numSales})
-                </Text>
-                <MiniSparkline
-                  data={valuation.recentSales.map((s) => s.priceCents)}
-                  color={sparkColor}
-                  width={56}
-                  height={20}
-                />
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 3, marginTop: 3 }}>
-                  <Text style={{ fontSize: 9, color: "#3b82f6" }}>View</Text>
-                  <FontAwesome name="chevron-right" size={7} color="#3b82f6" />
+                  <Text
+                    style={{
+                      fontSize: 13,
+                      fontWeight: "700",
+                      color: TREND_COLORS[trendColor(trendPct)],
+                    }}
+                  >
+                    {formatPct(trendPct)}
+                  </Text>
+                  <Text style={{ fontSize: 11, color: palette.textSubtle }}>
+                    {`\u00B7 ${valuation.numSales} sales`}
+                  </Text>
+                </View>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <MiniSparkline
+                    data={valuation.recentSales.map((s) => s.priceCents)}
+                    color={sparkColor}
+                    width={56}
+                    height={20}
+                  />
+                  <TouchableOpacity
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      const key = [card.year, card.set_name, card.player_name]
+                        .filter(Boolean)
+                        .map((s) =>
+                          String(s)
+                            .toLowerCase()
+                            .replace(/[^a-z0-9]+/g, "-")
+                            .replace(/(^-|-$)/g, "")
+                        )
+                        .join("-");
+                      const qs = new URLSearchParams({
+                        player: card.player_name,
+                        ...(card.set_name ? { set: card.set_name } : {}),
+                        ...(card.year ? { year: card.year.toString() } : {}),
+                        ...(card.grade ? { grade: card.grade } : {}),
+                        sport: card.sport,
+                      }).toString();
+                      router.push(`/card/${key}?${qs}` as never);
+                    }}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    style={{
+                      backgroundColor: palette.primaryBg,
+                      paddingHorizontal: 10,
+                      paddingVertical: 5,
+                      borderRadius: radius.pill,
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 4,
+                    }}
+                  >
+                    <FontAwesome name="line-chart" size={9} color={palette.primary} />
+                    <Text style={{ fontSize: 11, color: palette.primary, fontWeight: "700" }}>
+                      Details
+                    </Text>
+                  </TouchableOpacity>
                 </View>
               </View>
             </>
           ) : (
-            <Text style={{ fontSize: 11, color: "#a1a1aa", fontStyle: "italic" }}>
+            <Text style={{ fontSize: 11, color: palette.textSubtle, fontStyle: "italic" }}>
               No market data available
             </Text>
           )}
@@ -335,6 +504,7 @@ export default function PortfolioScreen() {
             card_number: card.card_number,
             grade: card.grade,
             image_url: card.image_url,
+            ebay_title: card.ebay_title,
           });
         })
       );
@@ -387,10 +557,10 @@ export default function PortfolioScreen() {
           flex: 1,
           justifyContent: "center",
           alignItems: "center",
-          backgroundColor: "#fafafa",
+          backgroundColor: palette.bg,
         }}
       >
-        <Text style={{ color: "#71717a" }}>Loading...</Text>
+        <Text style={{ color: palette.textMuted }}>Loading...</Text>
       </View>
     );
   }
@@ -403,18 +573,18 @@ export default function PortfolioScreen() {
           justifyContent: "center",
           alignItems: "center",
           padding: 20,
-          backgroundColor: "#fafafa",
+          backgroundColor: palette.bg,
         }}
       >
         <Text
-          style={{ fontSize: 20, fontWeight: "700", color: "#18181b", marginBottom: 8 }}
+          style={{ fontSize: 20, fontWeight: "700", color: palette.text, marginBottom: 8 }}
         >
           Sign in to view your portfolio
         </Text>
         <Text
           style={{
             fontSize: 15,
-            color: "#71717a",
+            color: palette.textMuted,
             textAlign: "center",
             marginBottom: 20,
           }}
@@ -424,13 +594,13 @@ export default function PortfolioScreen() {
         <TouchableOpacity
           onPress={() => router.push("/(auth)/login")}
           style={{
-            backgroundColor: "#18181b",
-            borderRadius: 10,
+            backgroundColor: palette.heroDark,
+            borderRadius: radius.pill,
             paddingHorizontal: 28,
             paddingVertical: 14,
           }}
         >
-          <Text style={{ color: "#fff", fontWeight: "600", fontSize: 16 }}>Sign in</Text>
+          <Text style={{ color: palette.textInverse, fontWeight: "700", fontSize: 15 }}>Sign in</Text>
         </TouchableOpacity>
       </View>
     );
@@ -451,7 +621,7 @@ export default function PortfolioScreen() {
 
   return (
     <>
-      <ScrollView style={{ flex: 1, backgroundColor: "#fafafa" }}>
+      <ScrollView style={{ flex: 1, backgroundColor: palette.bg }}>
         <View style={{ padding: 16 }}>
           <View
             style={{
@@ -461,115 +631,79 @@ export default function PortfolioScreen() {
             }}
           >
             <View>
-              <Text style={{ fontSize: 28, fontWeight: "700", color: "#18181b" }}>
+              <Text
+                style={{ fontSize: 30, fontWeight: "700", color: palette.text, letterSpacing: -0.8 }}
+              >
                 My Portfolio
               </Text>
-              <Text style={{ fontSize: 15, color: "#71717a", marginTop: 4 }}>
+              <Text style={{ fontSize: 14, color: palette.textMuted, marginTop: 4 }}>
                 Track your cards like stocks
               </Text>
             </View>
             <TouchableOpacity
               onPress={() => router.push("/(tabs)/scan")}
+              activeOpacity={0.85}
               style={{
-                backgroundColor: "#18181b",
-                borderRadius: 10,
-                paddingHorizontal: 16,
-                paddingVertical: 10,
+                backgroundColor: palette.heroDark,
+                borderRadius: radius.pill,
+                paddingHorizontal: 18,
+                paddingVertical: 11,
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 6,
+                ...shadow.sm,
               }}
             >
-              <Text style={{ color: "#fff", fontWeight: "600", fontSize: 14 }}>+ Add</Text>
+              <FontAwesome name="plus" size={12} color={palette.textInverse} />
+              <Text style={{ color: palette.textInverse, fontWeight: "700", fontSize: 13 }}>
+                Add
+              </Text>
             </TouchableOpacity>
           </View>
 
           {/* Stats row */}
           <View style={{ flexDirection: "row", gap: 10, marginTop: 16 }}>
-            <View
-              style={{
-                flex: 1,
-                backgroundColor: "#fff",
-                borderRadius: 12,
-                padding: 16,
-                borderWidth: 1,
-                borderColor: "#e4e4e7",
-              }}
-            >
-              <Text style={{ fontSize: 13, color: "#71717a", fontWeight: "500" }}>
-                Total Cards
-              </Text>
+            <PortfolioStat label="TOTAL CARDS" subtitle={`${cards.length} unique`}>
               <AnimatedNumber
                 value={totalCards}
-                style={{ fontSize: 22, fontWeight: "700", color: "#18181b", marginTop: 6 }}
+                style={{ fontSize: 26, fontWeight: "700", color: palette.text, letterSpacing: -0.6, marginTop: 8 }}
               />
-              <Text style={{ fontSize: 12, color: "#a1a1aa", marginTop: 4 }}>
-                {cards.length} unique
-              </Text>
-            </View>
-            <View
-              style={{
-                flex: 1,
-                backgroundColor: "#fff",
-                borderRadius: 12,
-                padding: 16,
-                borderWidth: 1,
-                borderColor: "#e4e4e7",
-              }}
-            >
-              <Text style={{ fontSize: 13, color: "#71717a", fontWeight: "500" }}>Invested</Text>
+            </PortfolioStat>
+            <PortfolioStat label="INVESTED" subtitle="cost basis">
               <AnimatedNumber
                 value={totalInvested}
                 formatter={formatCents}
-                style={{ fontSize: 22, fontWeight: "700", color: "#18181b", marginTop: 6 }}
+                style={{ fontSize: 26, fontWeight: "700", color: palette.text, letterSpacing: -0.6, marginTop: 8 }}
               />
-              <Text style={{ fontSize: 12, color: "#a1a1aa", marginTop: 4 }}>Cost basis</Text>
-            </View>
+            </PortfolioStat>
           </View>
 
           {/* Portfolio value + P/L row */}
           {(hasValuations || valuationsLoading) && (
             <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
-              <View
-                style={{
-                  flex: 1,
-                  backgroundColor: "#fff",
-                  borderRadius: 12,
-                  padding: 16,
-                  borderWidth: 1,
-                  borderColor: "#e4e4e7",
-                }}
-              >
-                <Text style={{ fontSize: 13, color: "#71717a", fontWeight: "500" }}>
-                  Market Value
-                </Text>
+              <PortfolioStat label="MARKET VALUE" subtitle="eBay comps">
                 {valuationsLoading ? (
-                  <ActivityIndicator size="small" color="#a1a1aa" style={{ marginTop: 8 }} />
+                  <ActivityIndicator size="small" color={palette.textSubtle} style={{ marginTop: 10 }} />
                 ) : (
                   <AnimatedNumber
                     value={totalCurrentValue}
                     formatter={formatCents}
-                    style={{ fontSize: 22, fontWeight: "700", color: "#18181b", marginTop: 6 }}
+                    style={{ fontSize: 26, fontWeight: "700", color: palette.text, letterSpacing: -0.6, marginTop: 8 }}
                   />
                 )}
-                <Text style={{ fontSize: 12, color: "#a1a1aa", marginTop: 4 }}>
-                  eBay comps
-                </Text>
-              </View>
-              <View
-                style={{
-                  flex: 1,
-                  backgroundColor: "#fff",
-                  borderRadius: 12,
-                  padding: 16,
-                  borderWidth: 1,
-                  borderColor: "#e4e4e7",
-                }}
+              </PortfolioStat>
+              <PortfolioStat
+                label="TOTAL P/L"
+                subtitle={
+                  totalPL !== null && totalInvested > 0
+                    ? `${totalPL >= 0 ? "+" : ""}${((totalPL / totalInvested) * 100).toFixed(1)}%`
+                    : "Unrealized"
+                }
               >
-                <Text style={{ fontSize: 13, color: "#71717a", fontWeight: "500" }}>
-                  Total P/L
-                </Text>
                 {valuationsLoading ? (
-                  <ActivityIndicator size="small" color="#a1a1aa" style={{ marginTop: 8 }} />
+                  <ActivityIndicator size="small" color={palette.textSubtle} style={{ marginTop: 10 }} />
                 ) : totalPL !== null ? (
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8 }}>
                     <FontAwesome
                       name={totalPL >= 0 ? "arrow-up" : "arrow-down"}
                       size={14}
@@ -578,20 +712,22 @@ export default function PortfolioScreen() {
                     <AnimatedNumber
                       value={Math.abs(totalPL)}
                       formatter={formatCents}
-                      style={{ fontSize: 22, fontWeight: "700", color: totalPLColor }}
+                      style={{ fontSize: 26, fontWeight: "700", color: totalPLColor, letterSpacing: -0.6 }}
                     />
                   </View>
                 ) : (
-                  <Text style={{ fontSize: 22, fontWeight: "700", color: "#a1a1aa", marginTop: 6 }}>
+                  <Text
+                    style={{
+                      fontSize: 26,
+                      fontWeight: "700",
+                      color: palette.textSubtle,
+                      marginTop: 8,
+                    }}
+                  >
                     —
                   </Text>
                 )}
-                <Text style={{ fontSize: 12, color: "#a1a1aa", marginTop: 4 }}>
-                  {totalPL !== null && totalInvested > 0
-                    ? `${totalPL >= 0 ? "+" : ""}${((totalPL / totalInvested) * 100).toFixed(1)}%`
-                    : "Unrealized"}
-                </Text>
-              </View>
+              </PortfolioStat>
             </View>
           )}
 
@@ -599,7 +735,8 @@ export default function PortfolioScreen() {
             style={{
               fontSize: 18,
               fontWeight: "700",
-              color: "#18181b",
+              color: palette.text,
+              letterSpacing: -0.3,
               marginTop: 24,
               marginBottom: 12,
             }}
@@ -609,26 +746,25 @@ export default function PortfolioScreen() {
 
           {isLoading && (
             <View style={{ alignItems: "center", paddingVertical: 40 }}>
-              <Text style={{ color: "#71717a" }}>Loading portfolio...</Text>
+              <Text style={{ color: palette.textMuted }}>Loading portfolio...</Text>
             </View>
           )}
 
           {!isLoading && cards.length === 0 && (
             <View
               style={{
-                backgroundColor: "#fff",
-                borderRadius: 12,
+                backgroundColor: palette.surface,
+                borderRadius: radius.lg,
                 padding: 40,
                 alignItems: "center",
-                borderWidth: 1,
-                borderColor: "#e4e4e7",
-                borderStyle: "dashed",
+                ...shadow.sm,
               }}
             >
-              <Text style={{ fontSize: 16, fontWeight: "500", color: "#71717a" }}>
+              <Text style={{ fontSize: 28, marginBottom: 8 }}>{"\uD83C\uDFAF"}</Text>
+              <Text style={{ fontSize: 16, fontWeight: "700", color: palette.text }}>
                 No cards yet
               </Text>
-              <Text style={{ fontSize: 13, color: "#a1a1aa", marginTop: 6 }}>
+              <Text style={{ fontSize: 13, color: palette.textSubtle, marginTop: 6 }}>
                 Scan or add a card to get started
               </Text>
             </View>

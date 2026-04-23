@@ -1,5 +1,5 @@
 import { supabase } from "./supabase";
-import type { MarketMover, CardSearchResult } from "./types";
+import type { MarketMover, CardSearchResult, WatchlistCard } from "./types";
 import {
   getTrendingCards as getMockTrending,
   searchCards as mockSearch,
@@ -213,11 +213,19 @@ export async function fetchSoldData(
   }
 }
 
-export async function getCardDetail(searchKey: string) {
-  const mockCard = getMockCard(searchKey);
-  if (!mockCard) return null;
-
+export async function getCardDetail(
+  searchKey: string,
+  hints?: {
+    playerName: string;
+    setName?: string | null;
+    year?: number | null;
+    grade?: string | null;
+    sport?: string;
+  }
+) {
   if (USE_MOCK) {
+    const mockCard = getMockCard(searchKey);
+    if (!mockCard) return null;
     return {
       card: mockCard,
       priceHistory: generateMockPriceHistory(mockCard.avgPriceCents, 90),
@@ -231,7 +239,66 @@ export async function getCardDetail(searchKey: string) {
     .from("price_aggregates")
     .select("*")
     .eq("search_key", searchKey)
-    .single();
+    .maybeSingle();
+
+  const mockCard = getMockCard(searchKey);
+
+  if (!aggData && !mockCard) {
+    const playerName = hints?.playerName ?? null;
+
+    if (!playerName) return null;
+
+    let listingsQuery = supabase
+      .from("sold_listings")
+      .select("id, title, sold_price_cents, sold_date, image_url, ebay_url, player_name, set_name, year, sport")
+      .ilike("player_name", `%${playerName}%`)
+      .order("sold_date", { ascending: false })
+      .limit(100);
+
+    if (hints?.year) listingsQuery = listingsQuery.eq("year", hints.year);
+
+    const { data: soldRows } = await listingsQuery;
+
+    if (!soldRows || soldRows.length === 0) {
+      const { data: broadRows } = await supabase
+        .from("sold_listings")
+        .select("id, title, sold_price_cents, sold_date, image_url, ebay_url, player_name, set_name, year, sport")
+        .ilike("player_name", `%${playerName}%`)
+        .order("sold_date", { ascending: false })
+        .limit(100);
+
+      if (!broadRows || broadRows.length === 0) {
+        const query = [hints?.year, hints?.setName, playerName].filter(Boolean).join(" ");
+        await supabase.functions.invoke("ebay-sold", {
+          body: { query, playerName, setName: hints?.setName, year: hints?.year, sport: hints?.sport },
+        });
+
+        return {
+          card: {
+            searchKey,
+            playerName,
+            setName: hints?.setName ?? null,
+            year: hints?.year ?? null,
+            sport: hints?.sport ?? "baseball",
+            imageUrl: null,
+            avgPriceCents: 0,
+            trend7dPct: 0,
+            trend30dPct: null,
+            numSales: 0,
+          } as MarketMover,
+          priceHistory: [],
+          relatedCards: [],
+          soldListings: [],
+          buySignal: null,
+          trendReason: "Fetching market data... refresh in a moment.",
+        };
+      }
+
+      return buildDetailFromSoldRows(searchKey, broadRows, hints);
+    }
+
+    return buildDetailFromSoldRows(searchKey, soldRows, hints);
+  }
 
   const card: MarketMover = aggData
     ? {
@@ -246,12 +313,12 @@ export async function getCardDetail(searchKey: string) {
         trend30dPct: aggData.trend_30d_pct ?? null,
         numSales: aggData.num_sales,
       }
-    : mockCard;
+    : mockCard!;
 
   const { data: soldData } = await supabase
     .from("sold_listings")
     .select("id, title, sold_price_cents, sold_date, image_url, ebay_url")
-    .eq("player_name", card.playerName)
+    .ilike("player_name", `%${card.playerName}%`)
     .order("sold_date", { ascending: false })
     .limit(200);
 
@@ -297,6 +364,78 @@ export async function getCardDetail(searchKey: string) {
         numSales: row.num_sales as number,
       }))
     : getMockRelated(card);
+
+  return {
+    card,
+    priceHistory,
+    relatedCards,
+    soldListings,
+    buySignal: getMockBuyPrice(card),
+    trendReason: getMockTrendReason(card),
+  };
+}
+
+async function buildDetailFromSoldRows(
+  searchKey: string,
+  soldRows: Record<string, unknown>[],
+  hints?: { playerName: string; setName?: string | null; year?: number | null; grade?: string | null; sport?: string }
+) {
+  const first = soldRows[0];
+  const prices = soldRows.map((r) => r.sold_price_cents as number);
+  const avg = computeRobustPrice(prices);
+
+  const card: MarketMover = {
+    searchKey,
+    playerName: hints?.playerName ?? (first.player_name as string) ?? "Unknown",
+    setName: hints?.setName ?? (first.set_name as string) ?? null,
+    year: hints?.year ?? (first.year as number) ?? null,
+    sport: hints?.sport ?? (first.sport as string) ?? "baseball",
+    imageUrl: (first.image_url as string) ?? null,
+    avgPriceCents: avg,
+    trend7dPct: 0,
+    trend30dPct: null,
+    numSales: soldRows.length,
+  };
+
+  const sorted = soldRows
+    .slice()
+    .sort((a, b) => (a.sold_date as string).localeCompare(b.sold_date as string));
+
+  const priceHistory = sorted.map((row) => ({
+    date: (row.sold_date as string).split("T")[0],
+    priceCents: row.sold_price_cents as number,
+  }));
+
+  const soldListings: SoldListing[] = soldRows.map((row) => ({
+    title: row.title as string,
+    priceCents: row.sold_price_cents as number,
+    date: (row.sold_date as string).split("T")[0],
+    imageUrl: (row.image_url as string) ?? null,
+    ebayUrl: (row.ebay_url as string) ?? "",
+  }));
+
+  const { data: relatedAggs } = await supabase
+    .from("price_aggregates")
+    .select("*")
+    .eq("sport", card.sport)
+    .neq("search_key", searchKey)
+    .order("trend_7d_pct", { ascending: false, nullsFirst: false })
+    .limit(4);
+
+  const relatedCards: MarketMover[] = relatedAggs?.length
+    ? relatedAggs.map((row: Record<string, unknown>) => ({
+        searchKey: row.search_key as string,
+        playerName: row.player_name as string,
+        setName: row.set_name as string | null,
+        year: row.year as number | null,
+        sport: row.sport as string,
+        imageUrl: (row.image_url as string) ?? null,
+        avgPriceCents: row.avg_price_cents as number,
+        trend7dPct: (row.trend_7d_pct as number) ?? 0,
+        trend30dPct: (row.trend_30d_pct as number) ?? null,
+        numSales: row.num_sales as number,
+      }))
+    : [];
 
   return {
     card,
@@ -409,6 +548,31 @@ export async function fetchActiveListingsForCard(card: {
 const valuationCache = new Map<string, { data: PortfolioValuation; ts: number }>();
 const VALUATION_TTL = 1000 * 60 * 30; // 30 min
 
+function cleanSetName(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  return raw
+    .replace(/\b(19[5-9]\d|20[0-2]\d)\b/g, "")
+    .replace(/\([^)]*\)/g, "")
+    .replace(/\s+/g, " ")
+    .trim() || null;
+}
+
+function buildValuationQuery(card: {
+  player_name: string;
+  set_name?: string | null;
+  year?: number | null;
+  card_number?: string | null;
+  grade?: string | null;
+}): string {
+  return [
+    card.year?.toString(),
+    cleanSetName(card.set_name),
+    card.player_name,
+    card.card_number ? `#${card.card_number}` : null,
+    card.grade,
+  ].filter(Boolean).join(" ");
+}
+
 export async function fetchPortfolioValuation(card: {
   player_name: string;
   set_name?: string | null;
@@ -416,15 +580,9 @@ export async function fetchPortfolioValuation(card: {
   card_number?: string | null;
   grade?: string | null;
   image_url?: string | null;
+  ebay_title?: string | null;
 }): Promise<PortfolioValuation | null> {
-  const parts = [
-    card.year?.toString(),
-    card.set_name,
-    card.player_name,
-    card.card_number ? `#${card.card_number}` : null,
-    card.grade,
-  ].filter(Boolean);
-  const query = parts.join(" ");
+  const query = buildValuationQuery(card);
 
   const cached = valuationCache.get(query);
   if (cached && Date.now() - cached.ts < VALUATION_TTL) return cached.data;
@@ -459,18 +617,225 @@ export async function fetchPortfolioValuation(card: {
   try {
     // Try Supabase cached data first (sold_listings + price_aggregates)
     const dbResult = await fetchValuationFromDB(card);
-    if (dbResult) {
+    if (dbResult && dbResult.currentValueCents > 0) {
       valuationCache.set(query, { data: dbResult, ts: Date.now() });
-      // Fire off a background refresh via edge function (don't await)
       refreshValuationFromAPI(query, card).catch(() => {});
       return dbResult;
     }
 
-    // No cached data -- call edge function
-    return await refreshValuationFromAPI(query, card);
+    // No cached data -- call edge function with full query
+    const apiResult = await refreshValuationFromAPI(query, card);
+    if (apiResult && apiResult.currentValueCents > 0) {
+      return apiResult;
+    }
+
+    // Value came back $0 -- try progressively broader searches
+    const broaderVariants = buildBroaderSearchVariants(card);
+    for (const variant of broaderVariants) {
+      const variantQuery = buildValuationQuery(variant);
+
+      if (variantQuery === query) continue;
+
+      const variantCached = valuationCache.get(variantQuery);
+      if (variantCached && Date.now() - variantCached.ts < VALUATION_TTL && variantCached.data.currentValueCents > 0) {
+        valuationCache.set(query, { data: variantCached.data, ts: Date.now() });
+        return variantCached.data;
+      }
+
+      const variantResult = await refreshValuationFromAPI(variantQuery, variant);
+      if (variantResult && variantResult.currentValueCents > 0) {
+        valuationCache.set(query, { data: variantResult, ts: Date.now() });
+        return variantResult;
+      }
+    }
+
+    // Last resort: use the original eBay listing title as search query
+    if (card.ebay_title) {
+      const ebayTitleResult = await refreshValuationFromAPI(card.ebay_title, {
+        player_name: card.ebay_title,
+      });
+      if (ebayTitleResult && ebayTitleResult.currentValueCents > 0) {
+        valuationCache.set(query, { data: ebayTitleResult, ts: Date.now() });
+        return ebayTitleResult;
+      }
+    }
+
+    return apiResult;
   } catch {
     return null;
   }
+}
+
+const JUNK_PHRASES = [
+  "free shipping", "fast shipping", "ships free", "free ship",
+  "fast free", "combined shipping",
+  "must see", "must have", "don't miss", "dont miss",
+  "low pop", "low population", "pop report",
+  "recently graded", "freshly graded", "just graded",
+  "newly graded", "new slab", "new label",
+  "read description", "see photos", "see pics",
+  "no reserve", "gem mint", "near mint",
+];
+
+const JUNK_WORDS = new Set([
+  "card", "cards", "lot", "vintage", "rare", "graded",
+  "authentic", "certified", "official", "genuine",
+  "mint", "gem", "near", "nm", "nm-mt", "ex", "vg",
+  "good", "fair", "poor",
+  "rookie", "rc", "refractor", "parallel", "insert", "base",
+  "ssp", "variation", "variant",
+  "baseball", "football", "basketball", "hockey",
+  "nba", "nfl", "mlb", "nhl", "ncaa",
+  "psa", "bgs", "sgc", "cgc",
+  "topps", "bowman", "panini", "donruss", "fleer", "score",
+  "prizm", "chrome", "update", "heritage", "select", "mosaic", "optic",
+  "upper", "deck", "leaf", "stadium", "club", "finest", "ultra",
+  "skybox", "hoops", "traded", "tiffany", "flagship",
+  "o-pee-chee", "nr",
+  "hot", "fire", "invest", "investment", "wow", "nice",
+  "great", "awesome", "beauty", "look",
+  "qty", "quantity", "shipping", "free", "fast", "ship",
+]);
+
+function cleanPlayerName(raw: string): string {
+  let cleaned = raw;
+
+  cleaned = cleaned.replace(/\b(PSA|BGS|SGC|CGC)\s*(?:graded|gem\s*mint|mint|near\s*mint|nm-mt|nm)?\s*\d+\.?\d*/gi, "");
+  cleaned = cleaned.replace(/\bgraded\s*\d+\.?\d*/gi, "");
+  cleaned = cleaned.replace(/\b(19[5-9]\d|20[0-2]\d)\b/g, "");
+  cleaned = cleaned.replace(/\([^)]*\)/g, "");
+  cleaned = cleaned.replace(/#\s*\w*\d+\w*/gi, "");
+  cleaned = cleaned.replace(/\b(?:no\.?|number)\s*\d+\w*\b/gi, "");
+
+  for (const phrase of JUNK_PHRASES) {
+    cleaned = cleaned.replace(new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "");
+  }
+
+  cleaned = cleaned
+    .split(/\s+/)
+    .filter((word) => {
+      const lower = word.toLowerCase().replace(/[^a-z0-9-]/g, "");
+      if (!lower) return false;
+      if (JUNK_WORDS.has(lower)) return false;
+      if (/^\d+$/.test(lower)) return false;
+      if (/^\d+\/\d+$/.test(lower)) return false;
+      return true;
+    })
+    .join(" ");
+
+  cleaned = cleaned
+    .replace(/[#*()[\]{}|~^`]/g, "")
+    .replace(/^[\s\-\u2013\u2014,.:;/\\]+/, "")
+    .replace(/[\s\-\u2013\u2014,.:;/\\]+$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return cleaned || raw;
+}
+
+function buildBroaderSearchVariants(card: {
+  player_name: string;
+  set_name?: string | null;
+  year?: number | null;
+  card_number?: string | null;
+  grade?: string | null;
+}): Array<typeof card> {
+  const variants: Array<typeof card> = [];
+  const cleanedName = cleanPlayerName(card.player_name);
+  const nameWasDirty = cleanedName !== card.player_name;
+  const name = nameWasDirty ? cleanedName : card.player_name;
+  const set = cleanSetName(card.set_name);
+
+  // 1. Cleaned name + set + year + card# + grade (fix dirty name/set, keep all details)
+  if (nameWasDirty || set !== card.set_name) {
+    variants.push({
+      player_name: name,
+      year: card.year,
+      set_name: set,
+      card_number: card.card_number,
+      grade: card.grade,
+    });
+  }
+
+  // 2. Same but drop grade
+  variants.push({
+    player_name: name,
+    year: card.year,
+    set_name: set,
+    card_number: card.card_number,
+    grade: null,
+  });
+
+  // 3. Drop card number, keep grade
+  if (card.card_number) {
+    variants.push({
+      player_name: name,
+      year: card.year,
+      set_name: set,
+      card_number: null,
+      grade: card.grade,
+    });
+  }
+
+  // 4. Set + name + year (no grade, no card#)
+  variants.push({
+    player_name: name,
+    year: card.year,
+    set_name: set,
+    card_number: null,
+    grade: null,
+  });
+
+  // 5. Name + year only
+  if (set) {
+    variants.push({
+      player_name: name,
+      year: card.year,
+      set_name: null,
+      card_number: null,
+      grade: null,
+    });
+  }
+
+  // 6. Just name (broadest)
+  if (card.year) {
+    variants.push({
+      player_name: name,
+      year: null,
+      set_name: null,
+      card_number: null,
+      grade: null,
+    });
+  }
+
+  return variants;
+}
+
+function computeRobustPrice(prices: number[]): number {
+  if (prices.length === 0) return 0;
+  if (prices.length === 1) return prices[0];
+
+  const sorted = [...prices].sort((a, b) => a - b);
+  const median = sorted.length % 2 === 0
+    ? Math.round((sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2)
+    : sorted[Math.floor(sorted.length / 2)];
+
+  if (sorted.length < 4) return median;
+
+  const q1 = sorted[Math.floor(sorted.length * 0.25)];
+  const q3 = sorted[Math.floor(sorted.length * 0.75)];
+  const iqr = q3 - q1;
+  const lowerBound = q1 - 1.5 * iqr;
+  const upperBound = q3 + 1.5 * iqr;
+
+  const inliers = sorted.filter((p) => p >= lowerBound && p <= upperBound);
+  if (inliers.length === 0) return median;
+
+  const inlierMedian = inliers.length % 2 === 0
+    ? Math.round((inliers[inliers.length / 2 - 1] + inliers[inliers.length / 2]) / 2)
+    : inliers[Math.floor(inliers.length / 2)];
+
+  return inlierMedian;
 }
 
 async function fetchValuationFromDB(card: {
@@ -527,7 +892,7 @@ async function fetchValuationFromDB(card: {
       .slice(-15);
 
     const prices = soldListings.map((s) => s.priceCents);
-    const avg = Math.round(prices.reduce((s, p) => s + p, 0) / prices.length);
+    const robustValue = computeRobustPrice(prices);
 
     const searchKey = [card.year, card.set_name, card.player_name]
       .filter(Boolean)
@@ -540,8 +905,13 @@ async function fetchValuationFromDB(card: {
       .eq("search_key", searchKey)
       .maybeSingle();
 
+    const aggValue = agg?.avg_price_cents ?? 0;
+    const finalValue = aggValue > 0
+      ? sanityCheckValue(aggValue, robustValue)
+      : robustValue;
+
     return {
-      currentValueCents: agg?.avg_price_cents ?? avg,
+      currentValueCents: finalValue,
       trend7dPct: agg?.trend_7d_pct ?? null,
       trend30dPct: agg?.trend_30d_pct ?? null,
       numSales: agg?.num_sales ?? soldListings.length,
@@ -552,6 +922,13 @@ async function fetchValuationFromDB(card: {
   } catch {
     return null;
   }
+}
+
+function sanityCheckValue(aggValue: number, robustValue: number): number {
+  if (robustValue === 0) return aggValue;
+  const ratio = aggValue / robustValue;
+  if (ratio > 3 || ratio < 0.33) return robustValue;
+  return Math.round((aggValue + robustValue) / 2);
 }
 
 async function refreshValuationFromAPI(
@@ -586,8 +963,15 @@ async function refreshValuationFromAPI(
     ebayUrl: s.ebayUrl,
   }));
 
+  const prices = soldListings.map((s) => s.priceCents);
+  const robustValue = computeRobustPrice(prices);
+  const aggValue = data.aggregate?.avg_price_cents ?? 0;
+  const finalValue = aggValue > 0 && robustValue > 0
+    ? sanityCheckValue(aggValue, robustValue)
+    : robustValue || aggValue;
+
   const result: PortfolioValuation = {
-    currentValueCents: data.aggregate?.avg_price_cents ?? 0,
+    currentValueCents: finalValue,
     trend7dPct: data.aggregate?.trend_7d_pct ?? null,
     trend30dPct: data.aggregate?.trend_30d_pct ?? null,
     numSales: data.aggregate?.num_sales ?? 0,
@@ -662,12 +1046,285 @@ export async function fetchRecentSales(
 
 function extractSetName(title: string): string | null {
   const match = title.match(
-    /\b(\d{4})\s+(topps|bowman|panini|upper deck|donruss|fleer|score|sp)\s*(chrome|update|heritage|prizm|select|mosaic|optic)?/i
+    /\b(topps|bowman|panini|upper deck|donruss|fleer|score|sp|prizm|leaf|stadium club|finest|ultra|skybox|hoops|o-pee-chee)\s*(chrome|update|heritage|prizm|select|mosaic|optic|traded|tiffany|flagship)?/i
   );
-  return match ? match[0].trim() : null;
+  if (!match) return null;
+  const brand = match[1];
+  const variant = match[2] ?? "";
+  return (brand + (variant ? " " + variant : "")).trim();
 }
 
 function extractYear(title: string): number | null {
   const match = title.match(/\b(19[5-9]\d|20[0-2]\d)\b/);
   return match ? parseInt(match[1]) : null;
+}
+
+export interface EbayItemLookupResult {
+  itemId: string;
+  title: string;
+  playerName: string;
+  setName: string | null;
+  year: number | null;
+  grade: string | null;
+  cardNumber: string | null;
+  sport: string;
+  priceCents: number;
+  imageUrl: string | null;
+  allImageUrls: string[];
+  ebayUrl: string;
+  condition: string | null;
+}
+
+function extractEbayItemId(url: string): string | null {
+  const itmMatch = url.match(/\/itm\/(?:[\w-]+\/)?([\d]{9,15})/i);
+  if (itmMatch) return itmMatch[1];
+
+  const plainMatch = url.match(/(?:^|\D)(\d{9,15})(?:$|\D)/);
+  if (plainMatch) return plainMatch[1];
+
+  return null;
+}
+
+function isOrderUrl(url: string): boolean {
+  return /order\.ebay\.com/i.test(url);
+}
+
+export async function lookupEbayItem(url: string): Promise<EbayItemLookupResult> {
+  const trimmed = url.trim();
+
+  if (isOrderUrl(trimmed) && !extractEbayItemId(trimmed)) {
+    throw new Error(
+      "This looks like an eBay order URL. Please paste the item URL instead " +
+        "(you can find it on the order details page)."
+    );
+  }
+
+  const { data, error } = await supabase.functions.invoke<EbayItemLookupResult>(
+    "ebay-item-lookup",
+    { body: { url: trimmed } }
+  );
+
+  if (error) {
+    const msg =
+      typeof error === "object" && "message" in error
+        ? (error as { message: string }).message
+        : "Failed to look up eBay item";
+    throw new Error(msg);
+  }
+
+  if (!data) {
+    throw new Error("No data returned from eBay lookup");
+  }
+
+  return data;
+}
+
+// -----------------------------------------------------------------------------
+// Watchlist
+// -----------------------------------------------------------------------------
+
+export interface AddWatchlistCardInput {
+  player_name: string;
+  set_name?: string | null;
+  year?: number | null;
+  card_number?: string | null;
+  grade?: string | null;
+  sport?: string;
+  image_url?: string | null;
+  ebay_title?: string | null;
+  ebay_item_id?: string | null;
+  ebay_url?: string | null;
+  target_price_cents?: number | null;
+  notes?: string | null;
+  snapshot_price_cents?: number | null;
+}
+
+function buildSearchKey(
+  playerName: string,
+  setName?: string | null,
+  year?: number | null
+): string {
+  return [year, setName, playerName]
+    .filter(Boolean)
+    .map((s) =>
+      String(s)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/(^-|-$)/g, "")
+    )
+    .join("-");
+}
+
+export async function fetchWatchlist(): Promise<WatchlistCard[]> {
+  const { data, error } = await supabase
+    .from("watchlist_cards")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (error) throw new Error(error.message);
+  return (data ?? []) as WatchlistCard[];
+}
+
+export async function addToWatchlist(input: AddWatchlistCardInput): Promise<WatchlistCard> {
+  const { data: userData } = await supabase.auth.getUser();
+  const userId = userData.user?.id;
+  if (!userId) throw new Error("Not signed in");
+
+  const searchKey = buildSearchKey(input.player_name, input.set_name, input.year);
+  const now = new Date().toISOString();
+
+  const payload = {
+    user_id: userId,
+    search_key: searchKey || null,
+    sport: input.sport ?? "baseball",
+    year: input.year ?? null,
+    player_name: input.player_name,
+    set_name: input.set_name ?? null,
+    card_number: input.card_number ?? null,
+    grade: input.grade ?? null,
+    image_url: input.image_url ?? null,
+    ebay_title: input.ebay_title ?? null,
+    ebay_item_id: input.ebay_item_id ?? null,
+    ebay_url: input.ebay_url ?? null,
+    target_price_cents: input.target_price_cents ?? null,
+    notes: input.notes ?? null,
+    snapshot_price_cents: input.snapshot_price_cents ?? null,
+    snapshot_taken_at: input.snapshot_price_cents != null ? now : null,
+  };
+
+  const { data, error } = await supabase
+    .from("watchlist_cards")
+    .insert(payload)
+    .select()
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data as WatchlistCard;
+}
+
+export async function removeFromWatchlist(id: string): Promise<void> {
+  const { error } = await supabase.from("watchlist_cards").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export async function updateWatchlistSnapshot(
+  id: string,
+  snapshotPriceCents: number
+): Promise<void> {
+  const { error } = await supabase
+    .from("watchlist_cards")
+    .update({
+      snapshot_price_cents: snapshotPriceCents,
+      snapshot_taken_at: new Date().toISOString(),
+    })
+    .eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+export interface UpdateWatchlistCardInput {
+  target_price_cents?: number | null;
+  notes?: string | null;
+}
+
+export async function updateWatchlistCard(
+  id: string,
+  patch: UpdateWatchlistCardInput
+): Promise<WatchlistCard> {
+  const { data, error } = await supabase
+    .from("watchlist_cards")
+    .update(patch)
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return data as WatchlistCard;
+}
+
+export interface MoveToPortfolioInput {
+  purchasePriceCents: number;
+  purchaseDate: string; // yyyy-mm-dd
+  quantity?: number;
+}
+
+/**
+ * Moves a watchlist entry into the portfolio: inserts a portfolio_cards row
+ * built from the watchlist card + user-supplied purchase details, then
+ * deletes the watchlist row. If the portfolio insert fails we leave the
+ * watchlist row intact so nothing is lost.
+ */
+export async function moveWatchlistToPortfolio(
+  card: WatchlistCard,
+  purchase: MoveToPortfolioInput
+): Promise<void> {
+  const { data: userData } = await supabase.auth.getUser();
+  const userId = userData.user?.id;
+  if (!userId) throw new Error("Not signed in");
+
+  const cardName = [card.year, card.set_name, card.player_name, card.card_number ? `#${card.card_number}` : ""]
+    .filter(Boolean)
+    .join(" ");
+
+  const { error: insertError } = await supabase.from("portfolio_cards").insert({
+    user_id: userId,
+    card_name: cardName,
+    player_name: card.player_name,
+    set_name: card.set_name,
+    year: card.year,
+    card_number: card.card_number,
+    sport: card.sport,
+    grade: card.grade,
+    image_url: card.image_url,
+    ebay_title: card.ebay_title,
+    ebay_item_id: card.ebay_item_id,
+    ebay_url: card.ebay_url,
+    purchase_price_cents: purchase.purchasePriceCents,
+    purchase_date: purchase.purchaseDate,
+    quantity: purchase.quantity ?? 1,
+  });
+
+  if (insertError) throw new Error(insertError.message);
+
+  const { error: deleteError } = await supabase
+    .from("watchlist_cards")
+    .delete()
+    .eq("id", card.id);
+
+  if (deleteError) {
+    // Portfolio insert succeeded; surface the delete failure but don't roll back.
+    throw new Error(
+      `Added to portfolio, but failed to remove from watchlist: ${deleteError.message}`
+    );
+  }
+}
+
+export interface WatchlistValuation {
+  currentValueCents: number;
+  numSales: number;
+  recentSales: { priceCents: number; date: string }[];
+}
+
+/**
+ * Lightweight valuation for a watchlist entry. Reuses the portfolio valuation
+ * pipeline but returns only the fields we need for the row.
+ */
+export async function fetchWatchlistValuation(
+  card: WatchlistCard
+): Promise<WatchlistValuation | null> {
+  const valuation = await fetchPortfolioValuation({
+    player_name: card.player_name,
+    set_name: card.set_name,
+    year: card.year,
+    card_number: card.card_number,
+    grade: card.grade,
+    image_url: card.image_url,
+    ebay_title: card.ebay_title,
+  });
+
+  if (!valuation) return null;
+
+  return {
+    currentValueCents: valuation.currentValueCents,
+    numSales: valuation.numSales,
+    recentSales: valuation.recentSales,
+  };
 }

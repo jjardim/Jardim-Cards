@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from "react";
-import { View, Text, TouchableOpacity, ScrollView, Alert, Platform } from "react-native";
+import { View, Text, TouchableOpacity, ScrollView, Alert, Platform, TextInput, ActivityIndicator } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
@@ -12,6 +12,7 @@ import { useToast } from "@/lib/toast-context";
 import { supabase } from "@/lib/supabase";
 import { router } from "expo-router";
 import { useQueryClient } from "@tanstack/react-query";
+import { lookupEbayItem } from "@/lib/api";
 
 async function runOCR(uri: string): Promise<string[]> {
   try {
@@ -49,6 +50,51 @@ export default function ScanScreen() {
   const [backImageUri, setBackImageUri] = useState<string | null>(null);
 
   const [sessionCards, setSessionCards] = useState<string[]>([]);
+  const [ebayUrl, setEbayUrl] = useState("");
+  const [lookingUp, setLookingUp] = useState(false);
+
+  const [ebayMeta, setEbayMeta] = useState<{
+    title: string | null;
+    itemId: string | null;
+    url: string | null;
+  }>({ title: null, itemId: null, url: null });
+
+  async function handleEbayLookup() {
+    if (!ebayUrl.trim()) {
+      showToast("Please paste an eBay URL", "error");
+      return;
+    }
+    setLookingUp(true);
+    try {
+      const result = await lookupEbayItem(ebayUrl);
+      if (result.playerName) setPlayerName(result.playerName);
+      if (result.setName) setSetName(result.setName);
+      if (result.year) setYear(result.year.toString());
+      if (result.cardNumber) setCardNumber(result.cardNumber);
+      if (result.grade) setGrade(result.grade);
+      if (result.sport) setSport(result.sport);
+      if (result.priceCents) setPurchasePrice((result.priceCents / 100).toFixed(2));
+      const images = result.allImageUrls ?? [];
+      if (images.length > 0) setImageUri(images[0]);
+      if (images.length > 1) setBackImageUri(images[1]);
+      setEbayMeta({
+        title: result.title,
+        itemId: result.itemId,
+        url: result.ebayUrl,
+      });
+      setEbayUrl("");
+      const photoCount = Math.min(images.length, 2);
+      showToast(
+        `Card details imported from eBay${photoCount > 0 ? ` (${photoCount} photo${photoCount > 1 ? "s" : ""})` : ""}`,
+        "success"
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to look up eBay item";
+      showToast(message, "error");
+    } finally {
+      setLookingUp(false);
+    }
+  }
 
   const resetForm = useCallback(() => {
     setPlayerName("");
@@ -62,6 +108,7 @@ export default function ScanScreen() {
     setImageUri(null);
     setBackImageUri(null);
     setParsed(null);
+    setEbayMeta({ title: null, itemId: null, url: null });
   }, []);
 
   async function processImage(uri: string) {
@@ -180,6 +227,9 @@ export default function ScanScreen() {
       grade: grade || null,
       image_url: permanentImageUrl,
       back_image_url: permanentBackImageUrl,
+      ebay_title: ebayMeta.title,
+      ebay_item_id: ebayMeta.itemId,
+      ebay_url: ebayMeta.url,
       purchase_price_cents: priceCents,
       purchase_date: purchaseDate,
       quantity: 1,
@@ -298,7 +348,71 @@ export default function ScanScreen() {
           </View>
         )}
 
-        <View style={{ flexDirection: "row", gap: 10, marginTop: 20 }}>
+        {/* Import from eBay URL */}
+        <View
+          style={{
+            backgroundColor: "#fff",
+            borderRadius: 12,
+            padding: 14,
+            marginTop: 20,
+            borderWidth: 1,
+            borderColor: "#e4e4e7",
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <FontAwesome name="link" size={14} color="#71717a" />
+            <Text style={{ fontSize: 14, fontWeight: "600", color: "#18181b" }}>
+              Import from eBay URL
+            </Text>
+          </View>
+          <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+            <TextInput
+              value={ebayUrl}
+              onChangeText={setEbayUrl}
+              placeholder="Paste eBay item URL..."
+              placeholderTextColor="#a1a1aa"
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={{
+                flex: 1,
+                backgroundColor: "#f4f4f5",
+                borderRadius: 8,
+                paddingHorizontal: 12,
+                paddingVertical: Platform.OS === "web" ? 10 : 12,
+                fontSize: 14,
+                color: "#18181b",
+              }}
+            />
+            <TouchableOpacity
+              onPress={handleEbayLookup}
+              disabled={lookingUp || !ebayUrl.trim()}
+              style={{
+                backgroundColor: "#18181b",
+                borderRadius: 8,
+                paddingHorizontal: 16,
+                paddingVertical: Platform.OS === "web" ? 10 : 12,
+                opacity: lookingUp || !ebayUrl.trim() ? 0.5 : 1,
+              }}
+            >
+              {lookingUp ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={{ color: "#fff", fontWeight: "600", fontSize: 14 }}>Look Up</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+          <Text style={{ fontSize: 11, color: "#a1a1aa", marginTop: 6 }}>
+            Paste any eBay item page URL to auto-fill card details
+          </Text>
+        </View>
+
+        <View style={{ flexDirection: "row", alignItems: "center", marginTop: 16, marginBottom: 4 }}>
+          <View style={{ flex: 1, height: 1, backgroundColor: "#e4e4e7" }} />
+          <Text style={{ marginHorizontal: 12, fontSize: 12, color: "#a1a1aa", fontWeight: "500" }}>or scan a card</Text>
+          <View style={{ flex: 1, height: 1, backgroundColor: "#e4e4e7" }} />
+        </View>
+
+        <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
           <TouchableOpacity
             onPress={() => setScanning(true)}
             style={{ flex: 1, backgroundColor: "#18181b", borderRadius: 12, padding: 18, alignItems: "center" }}

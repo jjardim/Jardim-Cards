@@ -55,10 +55,35 @@ export interface PortfolioCard {
   grade: string | null;
   image_url: string | null;
   back_image_url: string | null;
+  ebay_title: string | null;
+  ebay_item_id: string | null;
+  ebay_url: string | null;
   purchase_price_cents: number;
   purchase_date: string;
   quantity: number;
   notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WatchlistCard {
+  id: string;
+  user_id: string;
+  search_key: string | null;
+  sport: string;
+  year: number | null;
+  player_name: string;
+  set_name: string | null;
+  card_number: string | null;
+  grade: string | null;
+  image_url: string | null;
+  ebay_title: string | null;
+  ebay_item_id: string | null;
+  ebay_url: string | null;
+  target_price_cents: number | null;
+  notes: string | null;
+  snapshot_price_cents: number | null;
+  snapshot_taken_at: string | null;
   created_at: string;
   updated_at: string;
 }

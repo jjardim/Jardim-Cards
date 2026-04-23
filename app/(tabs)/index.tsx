@@ -16,10 +16,13 @@ import { CardImage } from "@/components/CardImage";
 import { HotCarousel } from "@/components/HotCarousel";
 import { PortfolioWidget } from "@/components/PortfolioWidget";
 import { RecentSoldFeed } from "@/components/RecentSoldFeed";
-import { formatCents, formatPct, trendColor } from "@/lib/utils";
+import { HottestHero } from "@/components/HottestHero";
+import { SportMix } from "@/components/SportMix";
+import { formatCents, formatPct } from "@/lib/utils";
 import { fetchTrending } from "@/lib/api";
 import { SPORTS } from "@/lib/types";
 import type { MarketMover } from "@/lib/types";
+import { palette, radius, shadow, getSportTheme } from "@/lib/theme";
 
 const ERAS = [
   { label: "All", min: undefined, max: undefined },
@@ -41,6 +44,43 @@ const PRICE_TIERS = [
 
 type TrendTab = "gainers" | "losers";
 
+function FilterPill({
+  label,
+  active,
+  activeColor,
+  onPress,
+}: {
+  label: string;
+  active: boolean;
+  activeColor?: string;
+  onPress: () => void;
+}) {
+  const bg = active ? activeColor ?? palette.heroDark : palette.surface;
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.7}
+      style={{
+        paddingHorizontal: 14,
+        paddingVertical: 8,
+        borderRadius: radius.pill,
+        backgroundColor: bg,
+        ...(active ? shadow.sm : {}),
+      }}
+    >
+      <Text
+        style={{
+          fontSize: 12,
+          fontWeight: active ? "700" : "600",
+          color: active ? palette.textInverse : palette.textMuted,
+        }}
+      >
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
 export default function DashboardScreen() {
   const router = useRouter();
   const [sport, setSport] = useState("");
@@ -51,6 +91,7 @@ export default function DashboardScreen() {
 
   const era = ERAS[eraIdx];
   const tier = PRICE_TIERS[tierIdx];
+  const sportTheme = getSportTheme(sport);
 
   const { data: trending = [], isLoading } = useQuery<MarketMover[]>({
     queryKey: ["trending", sport, era.min, era.max],
@@ -76,11 +117,19 @@ export default function DashboardScreen() {
   const trendList = trendTab === "gainers" ? gainers : losers;
 
   const topGainer = useMemo(
-    () => filtered.reduce<MarketMover | null>((b, c) => (!b || c.trend7dPct > b.trend7dPct ? c : b), null),
+    () =>
+      filtered.reduce<MarketMover | null>(
+        (b, c) => (!b || c.trend7dPct > b.trend7dPct ? c : b),
+        null
+      ),
     [filtered]
   );
   const topDecliner = useMemo(
-    () => filtered.reduce<MarketMover | null>((b, c) => (!b || c.trend7dPct < b.trend7dPct ? c : b), null),
+    () =>
+      filtered.reduce<MarketMover | null>(
+        (b, c) => (!b || c.trend7dPct < b.trend7dPct ? c : b),
+        null
+      ),
     [filtered]
   );
   const totalVolume = useMemo(() => filtered.reduce((s, c) => s + c.numSales, 0), [filtered]);
@@ -95,31 +144,68 @@ export default function DashboardScreen() {
   };
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: "#fafafa" }}>
-      <View style={{ padding: 16 }}>
+    <ScrollView style={{ flex: 1, backgroundColor: palette.bg }}>
+      <View style={{ padding: 16, paddingBottom: 32 }}>
         {/* Header */}
-        <Text style={{ fontSize: 28, fontWeight: "700", color: "#18181b" }}>Market Dashboard</Text>
-        <Text style={{ fontSize: 15, color: "#71717a", marginTop: 4 }}>
-          Top trending sports cards and price movements
-        </Text>
+        <View
+          style={{
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 13, color: palette.textMuted, fontWeight: "500" }}>
+              {new Date().toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}
+            </Text>
+            <Text
+              style={{
+                fontSize: 30,
+                fontWeight: "700",
+                color: palette.text,
+                letterSpacing: -0.8,
+                marginTop: 4,
+              }}
+            >
+              Market Pulse
+            </Text>
+            <Text style={{ fontSize: 14, color: palette.textMuted, marginTop: 2 }}>
+              Where sports cards are moving today
+            </Text>
+          </View>
+          <TouchableOpacity
+            onPress={() => router.push("/(tabs)/profile")}
+            activeOpacity={0.7}
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: radius.pill,
+              backgroundColor: palette.surface,
+              alignItems: "center",
+              justifyContent: "center",
+              ...shadow.sm,
+            }}
+          >
+            <FontAwesome name="user" size={18} color={palette.text} />
+          </TouchableOpacity>
+        </View>
 
         {/* Search bar */}
         <View
           style={{
             flexDirection: "row",
             alignItems: "center",
-            backgroundColor: "#fff",
-            borderRadius: 12,
-            borderWidth: 1,
-            borderColor: "#e4e4e7",
+            backgroundColor: palette.surface,
+            borderRadius: radius.pill,
             marginTop: 16,
-            paddingHorizontal: 12,
+            paddingHorizontal: 16,
+            ...shadow.sm,
           }}
         >
-          <FontAwesome name="search" size={14} color="#a1a1aa" />
+          <FontAwesome name="search" size={14} color={palette.textSubtle} />
           <TextInput
             placeholder="Search players, sets, years..."
-            placeholderTextColor="#a1a1aa"
+            placeholderTextColor={palette.textSubtle}
             value={searchText}
             onChangeText={setSearchText}
             onSubmitEditing={handleSearch}
@@ -129,185 +215,220 @@ export default function DashboardScreen() {
               paddingVertical: 12,
               paddingHorizontal: 10,
               fontSize: 14,
-              color: "#18181b",
+              color: palette.text,
             }}
           />
           {searchText.length > 0 && (
-            <TouchableOpacity onPress={() => setSearchText("")} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-              <FontAwesome name="times-circle" size={16} color="#d4d4d8" />
+            <TouchableOpacity
+              onPress={() => setSearchText("")}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <FontAwesome name="times-circle" size={16} color={palette.textSubtle} />
             </TouchableOpacity>
           )}
         </View>
 
         {/* Sport filters */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 14 }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 16 }}>
           <View style={{ flexDirection: "row", gap: 8 }}>
-            {[{ label: "All", value: "" }, ...SPORTS.map((s) => ({ label: s.charAt(0).toUpperCase() + s.slice(1), value: s }))].map((item) => (
-              <TouchableOpacity
-                key={item.value}
-                onPress={() => setSport(item.value)}
-                style={{
-                  paddingHorizontal: 14,
-                  paddingVertical: 8,
-                  borderRadius: 8,
-                  backgroundColor: sport === item.value ? "#18181b" : "#fff",
-                  borderWidth: 1,
-                  borderColor: sport === item.value ? "#18181b" : "#e4e4e7",
-                }}
-              >
-                <Text style={{ fontSize: 13, fontWeight: "600", color: sport === item.value ? "#fff" : "#3f3f46" }}>
-                  {item.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
+            {[{ label: "All", value: "", emoji: "\uD83C\uDFAF" }, ...SPORTS.map((s) => {
+              const t = getSportTheme(s);
+              return { label: t.label, value: s, emoji: t.emoji };
+            })].map((item) => {
+              const active = sport === item.value;
+              const t = getSportTheme(item.value);
+              return (
+                <TouchableOpacity
+                  key={item.value || "all"}
+                  onPress={() => setSport(item.value)}
+                  activeOpacity={0.7}
+                  style={{
+                    paddingHorizontal: 14,
+                    paddingVertical: 9,
+                    borderRadius: radius.pill,
+                    backgroundColor: active ? t.color : palette.surface,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 6,
+                    ...(active ? shadow.sm : {}),
+                  }}
+                >
+                  <Text style={{ fontSize: 13 }}>{item.emoji}</Text>
+                  <Text
+                    style={{
+                      fontSize: 13,
+                      fontWeight: active ? "700" : "600",
+                      color: active ? palette.textInverse : palette.textMuted,
+                    }}
+                  >
+                    {item.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         </ScrollView>
 
         {/* Era pills */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
           <View style={{ flexDirection: "row", gap: 6 }}>
-            {ERAS.map((e, i) => {
-              const active = eraIdx === i;
-              return (
-                <TouchableOpacity
-                  key={e.label}
-                  onPress={() => setEraIdx(i)}
-                  style={{
-                    paddingHorizontal: 12,
-                    paddingVertical: 7,
-                    borderRadius: 8,
-                    backgroundColor: active ? "#18181b" : "#fff",
-                    borderWidth: 1,
-                    borderColor: active ? "#18181b" : "#e4e4e7",
-                  }}
-                >
-                  <Text style={{ fontSize: 12, fontWeight: "600", color: active ? "#fff" : "#52525b" }}>
-                    {e.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+            {ERAS.map((e, i) => (
+              <FilterPill
+                key={e.label}
+                label={e.label}
+                active={eraIdx === i}
+                onPress={() => setEraIdx(i)}
+              />
+            ))}
           </View>
         </ScrollView>
 
         {/* Price tier pills */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
           <View style={{ flexDirection: "row", gap: 6 }}>
-            {PRICE_TIERS.map((t, i) => {
-              const active = tierIdx === i;
-              return (
-                <TouchableOpacity
-                  key={t.label}
-                  onPress={() => setTierIdx(i)}
-                  style={{
-                    paddingHorizontal: 12,
-                    paddingVertical: 7,
-                    borderRadius: 8,
-                    backgroundColor: active ? "#7c3aed" : "#fff",
-                    borderWidth: 1,
-                    borderColor: active ? "#7c3aed" : "#e4e4e7",
-                  }}
-                >
-                  <Text style={{ fontSize: 12, fontWeight: "600", color: active ? "#fff" : "#52525b" }}>
-                    {t.label}{"sublabel" in t ? ` ${t.sublabel}` : ""}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+            {PRICE_TIERS.map((t, i) => (
+              <FilterPill
+                key={t.label}
+                label={`${t.label}${"sublabel" in t ? ` ${t.sublabel}` : ""}`}
+                active={tierIdx === i}
+                activeColor={palette.purple}
+                onPress={() => setTierIdx(i)}
+              />
+            ))}
           </View>
         </ScrollView>
+
+        {/* Hottest Card dark hero */}
+        {topGainer && (
+          <HottestHero
+            card={topGainer}
+            onPress={() => router.push(`/card/${topGainer.searchKey}`)}
+          />
+        )}
 
         {/* Portfolio widget */}
         <PortfolioWidget />
 
-        {/* Loading / empty state */}
+        {/* Loading */}
         {isLoading && (
           <View style={{ alignItems: "center", paddingVertical: 40 }}>
-            <ActivityIndicator size="large" color="#18181b" />
-            <Text style={{ fontSize: 13, color: "#71717a", marginTop: 10 }}>
-              Loading {sport ? sport : "trending"} cards...
+            <ActivityIndicator size="large" color={palette.primary} />
+            <Text style={{ fontSize: 13, color: palette.textMuted, marginTop: 10 }}>
+              Loading {sportTheme.label.toLowerCase()} cards...
             </Text>
           </View>
         )}
 
-        {/* Stats */}
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 16 }}>
-          <View style={{ flex: 1, minWidth: 150 }}>
-            <StatCard
-              label="Tracked Cards"
-              value={filtered.length.toString()}
-              subtitle="Cards with recent sales"
-            />
+        {/* Big-number stats strip */}
+        <View style={{ marginTop: 20 }}>
+          <View style={{ flexDirection: "row", gap: 10 }}>
+            <View style={{ flex: 1 }}>
+              <StatCard
+                label="Tracked"
+                value={filtered.length.toString()}
+                subtitle="cards with sales"
+                icon={<FontAwesome name="list" size={12} color={palette.primary} />}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <StatCard
+                label="Avg Move"
+                value={avgTrend !== null ? formatPct(avgTrend) : "\u2014"}
+                trend={avgTrend}
+                subtitle={`${totalVolume.toLocaleString()} sales (7d)`}
+                accent={palette.successBg}
+                icon={<FontAwesome name="line-chart" size={12} color={palette.success} />}
+              />
+            </View>
           </View>
-          <View style={{ flex: 1, minWidth: 150 }}>
-            <StatCard
-              label="Hottest Card"
-              value={topGainer?.playerName ?? "\u2014"}
-              trend={topGainer?.trend7dPct}
-              subtitle={topGainer?.setName ?? undefined}
-              onPress={topGainer ? () => router.push(`/card/${topGainer.searchKey}`) : undefined}
-            />
-          </View>
+
+          {topDecliner && (
+            <View style={{ marginTop: 10 }}>
+              <StatCard
+                label="Biggest Drop"
+                value={topDecliner.playerName}
+                trend={topDecliner.trend7dPct}
+                subtitle={topDecliner.setName ?? undefined}
+                accent={palette.dangerBg}
+                icon={<FontAwesome name="arrow-down" size={11} color={palette.danger} />}
+                onPress={() => router.push(`/card/${topDecliner.searchKey}`)}
+              />
+            </View>
+          )}
         </View>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 10 }}>
-          <View style={{ flex: 1, minWidth: 150 }}>
-            <StatCard
-              label="Biggest Drop"
-              value={topDecliner?.playerName ?? "\u2014"}
-              trend={topDecliner?.trend7dPct}
-              subtitle={topDecliner?.setName ?? undefined}
-              onPress={topDecliner ? () => router.push(`/card/${topDecliner.searchKey}`) : undefined}
-            />
-          </View>
-          <View style={{ flex: 1, minWidth: 150 }}>
-            <StatCard
-              label="Avg Movement"
-              value={avgTrend !== null ? formatPct(avgTrend) : "\u2014"}
-              trend={avgTrend}
-              subtitle={`${totalVolume.toLocaleString()} sales (7d)`}
-            />
-          </View>
-        </View>
+
+        {/* Sport allocation */}
+        <SportMix cards={filtered} />
 
         {/* Hot Right Now carousel */}
         <HotCarousel cards={filtered} />
 
         {/* Gainers / Losers */}
         <View style={{ marginTop: 24 }}>
-          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <Text style={{ fontSize: 18, fontWeight: "700", color: "#18181b" }}>
-              {trendTab === "gainers" ? "Top Gainers" : "Top Losers"}
-            </Text>
-            <View style={{ flexDirection: "row", backgroundColor: "#f4f4f5", borderRadius: 8, padding: 2 }}>
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: 14,
+            }}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Text style={{ fontSize: 20 }}>
+                {trendTab === "gainers" ? "\uD83D\uDE80" : "\uD83D\uDCC9"}
+              </Text>
+              <Text
+                style={{ fontSize: 18, fontWeight: "700", color: palette.text, letterSpacing: -0.3 }}
+              >
+                {trendTab === "gainers" ? "Top Gainers" : "Top Losers"}
+              </Text>
+            </View>
+            <View
+              style={{
+                flexDirection: "row",
+                backgroundColor: palette.surface,
+                borderRadius: radius.pill,
+                padding: 3,
+                ...shadow.sm,
+              }}
+            >
               <TouchableOpacity
                 onPress={() => setTrendTab("gainers")}
+                activeOpacity={0.7}
                 style={{
                   paddingHorizontal: 14,
                   paddingVertical: 6,
-                  borderRadius: 6,
-                  backgroundColor: trendTab === "gainers" ? "#fff" : "transparent",
-                  ...(trendTab === "gainers"
-                    ? { shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 2, elevation: 1 }
-                    : {}),
+                  borderRadius: radius.pill,
+                  backgroundColor: trendTab === "gainers" ? palette.success : "transparent",
                 }}
               >
-                <Text style={{ fontSize: 12, fontWeight: trendTab === "gainers" ? "700" : "500", color: trendTab === "gainers" ? "#22c55e" : "#71717a" }}>
+                <Text
+                  style={{
+                    fontSize: 12,
+                    fontWeight: "700",
+                    color: trendTab === "gainers" ? palette.textInverse : palette.textMuted,
+                  }}
+                >
                   Gainers
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={() => setTrendTab("losers")}
+                activeOpacity={0.7}
                 style={{
                   paddingHorizontal: 14,
                   paddingVertical: 6,
-                  borderRadius: 6,
-                  backgroundColor: trendTab === "losers" ? "#fff" : "transparent",
-                  ...(trendTab === "losers"
-                    ? { shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 2, elevation: 1 }
-                    : {}),
+                  borderRadius: radius.pill,
+                  backgroundColor: trendTab === "losers" ? palette.danger : "transparent",
                 }}
               >
-                <Text style={{ fontSize: 12, fontWeight: trendTab === "losers" ? "700" : "500", color: trendTab === "losers" ? "#ef4444" : "#71717a" }}>
+                <Text
+                  style={{
+                    fontSize: 12,
+                    fontWeight: "700",
+                    color: trendTab === "losers" ? palette.textInverse : palette.textMuted,
+                  }}
+                >
                   Losers
                 </Text>
               </TouchableOpacity>
@@ -315,69 +436,107 @@ export default function DashboardScreen() {
           </View>
 
           {trendList.length === 0 && !isLoading && (
-            <View style={{ backgroundColor: "#fff", borderRadius: 12, padding: 24, alignItems: "center", borderWidth: 1, borderColor: "#f4f4f5" }}>
-              <Text style={{ fontSize: 13, color: "#a1a1aa" }}>
-                No {trendTab === "gainers" ? "gainers" : "losers"} found for this filter
+            <View
+              style={{
+                backgroundColor: palette.surface,
+                borderRadius: radius.lg,
+                padding: 28,
+                alignItems: "center",
+                ...shadow.sm,
+              }}
+            >
+              <Text style={{ fontSize: 13, color: palette.textSubtle }}>
+                No {trendTab === "gainers" ? "gainers" : "losers"} for this filter
               </Text>
             </View>
           )}
 
-          {trendList.map((card, i) => (
-            <TouchableOpacity
-              key={card.searchKey}
-              activeOpacity={0.7}
-              onPress={() => router.push(`/card/${card.searchKey}`)}
-              style={{
-                backgroundColor: "#fff",
-                borderRadius: 12,
-                padding: 12,
-                marginBottom: 8,
-                borderWidth: 1,
-                borderColor: "#e4e4e7",
-                flexDirection: "row",
-                alignItems: "center",
-              }}
-            >
-              <Text
+          {trendList.map((card, i) => {
+            const theme = getSportTheme(card.sport);
+            return (
+              <TouchableOpacity
+                key={card.searchKey}
+                activeOpacity={0.7}
+                onPress={() => router.push(`/card/${card.searchKey}`)}
                 style={{
-                  fontSize: 14,
-                  fontWeight: "700",
-                  color: "#d4d4d8",
-                  width: 28,
-                  textAlign: "center",
+                  backgroundColor: palette.surface,
+                  borderRadius: radius.lg,
+                  padding: 12,
+                  marginBottom: 10,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  ...shadow.sm,
                 }}
               >
-                #{i + 1}
-              </Text>
-              <CardImage
-                imageUrl={card.imageUrl}
-                playerName={card.playerName}
-                setName={card.setName}
-                year={card.year}
-                width={48}
-                height={67}
-              />
-              <View style={{ flex: 1, marginLeft: 10, marginRight: 8 }}>
-                <Text style={{ fontSize: 14, fontWeight: "600", color: "#18181b" }}>{card.playerName}</Text>
-                <Text style={{ fontSize: 12, color: "#71717a", marginTop: 2 }}>
-                  {card.setName} {card.year ? `(${card.year})` : ""}
-                </Text>
-                <Text style={{ fontSize: 14, fontWeight: "700", color: "#18181b", marginTop: 3 }}>
-                  {formatCents(card.avgPriceCents)}
-                </Text>
-              </View>
-              <View style={{ alignItems: "flex-end", gap: 4 }}>
-                <TrendBadge pct={card.trend7dPct} />
-                <Text style={{ fontSize: 11, color: "#a1a1aa" }}>{card.numSales} sales</Text>
-              </View>
-            </TouchableOpacity>
-          ))}
+                <View
+                  style={{
+                    width: 26,
+                    height: 26,
+                    borderRadius: radius.pill,
+                    backgroundColor: theme.bg,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    marginRight: 10,
+                  }}
+                >
+                  <Text style={{ fontSize: 11, fontWeight: "800", color: theme.color }}>
+                    {i + 1}
+                  </Text>
+                </View>
+                <CardImage
+                  imageUrl={card.imageUrl}
+                  playerName={card.playerName}
+                  setName={card.setName}
+                  year={card.year}
+                  width={48}
+                  height={67}
+                  borderRadius={6}
+                />
+                <View style={{ flex: 1, marginLeft: 10, marginRight: 8 }}>
+                  <Text style={{ fontSize: 14, fontWeight: "700", color: palette.text }}>
+                    {card.playerName}
+                  </Text>
+                  <Text
+                    style={{ fontSize: 12, color: palette.textMuted, marginTop: 2 }}
+                    numberOfLines={1}
+                  >
+                    {card.setName} {card.year ? `(${card.year})` : ""}
+                  </Text>
+                  <Text
+                    style={{
+                      fontSize: 15,
+                      fontWeight: "700",
+                      color: palette.text,
+                      marginTop: 4,
+                      letterSpacing: -0.3,
+                    }}
+                  >
+                    {formatCents(card.avgPriceCents)}
+                  </Text>
+                </View>
+                <View style={{ alignItems: "flex-end", gap: 4 }}>
+                  <TrendBadge pct={card.trend7dPct} />
+                  <Text style={{ fontSize: 10, color: palette.textSubtle }}>
+                    {card.numSales} sales
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
         </View>
 
         {/* Recently sold feed */}
         <RecentSoldFeed sport={sport || undefined} yearMin={era.min} yearMax={era.max} />
 
-        <Text style={{ textAlign: "center", fontSize: 11, color: "#a1a1aa", marginTop: 16, marginBottom: 32 }}>
+        <Text
+          style={{
+            textAlign: "center",
+            fontSize: 11,
+            color: palette.textSubtle,
+            marginTop: 20,
+            marginBottom: 32,
+          }}
+        >
           Prices from eBay sold listings
         </Text>
       </View>
