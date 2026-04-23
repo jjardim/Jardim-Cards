@@ -10,6 +10,7 @@ import {
   getTrendReason as getMockTrendReason,
 } from "./mock-data";
 import { fetchPortfolioValuationFromPriceCharting } from "./pricing/pricecharting";
+import { extractGrade, stripGrade } from "./parsing/grade";
 
 const USE_MOCK = false;
 
@@ -185,6 +186,7 @@ export async function searchEbayCards(
       year: extractYear(item.title),
       cardNumber: null,
       sport: sport ?? "baseball",
+      grade: extractGrade(item.title),
       imageUrl: item.imageUrl,
       currentPriceCents: item.priceCents,
       trend7dPct: null,
@@ -229,6 +231,13 @@ export async function getCardDetail(
     year?: number | null;
     grade?: string | null;
     sport?: string;
+    /**
+     * When present, we trust the hints were enriched via PriceCharting (from
+     * the watchlist/portfolio add flow) and use them to override any stale
+     * `price_aggregates` row that still carries eBay-parsed garbage. The PC
+     * product id is also used as a fast-path lookup for the headline price.
+     */
+    pricechartingId?: string | null;
   }
 ) {
   if (USE_MOCK) {
@@ -252,6 +261,21 @@ export async function getCardDetail(
   const mockCard = getMockCard(searchKey);
 
   if (!aggData && !mockCard) {
+    // When the caller has a PriceCharting id we can build the headline from
+    // PC directly and skip the noisy eBay title-search fallback entirely.
+    if (hints?.pricechartingId && hints?.playerName) {
+      const pc = await fetchPortfolioValuationFromPriceCharting({
+        player_name: hints.playerName,
+        set_name: hints.setName,
+        year: hints.year,
+        grade: hints.grade,
+        pricecharting_id: hints.pricechartingId,
+      });
+      if (pc) {
+        return buildDetailFromPriceCharting(searchKey, hints, pc);
+      }
+    }
+
     const playerName = hints?.playerName ?? null;
 
     if (!playerName) return null;
@@ -308,18 +332,35 @@ export async function getCardDetail(
     return buildDetailFromSoldRows(searchKey, soldRows, hints);
   }
 
+  // When the caller passes a `pricechartingId`, the hints came from a
+  // PC-enriched source (watchlist/portfolio) and are authoritative. In that
+  // case, prefer hints for display fields AND pull the headline price from PC
+  // so the detail screen agrees with what the watchlist/portfolio showed.
+  const trustHints = !!hints?.pricechartingId;
+
+  let pcValuation: PortfolioValuation | null = null;
+  if (hints?.pricechartingId) {
+    pcValuation = await fetchPortfolioValuationFromPriceCharting({
+      player_name: hints.playerName,
+      set_name: hints.setName,
+      year: hints.year,
+      grade: hints.grade,
+      pricecharting_id: hints.pricechartingId,
+    });
+  }
+
   const card: MarketMover = aggData
     ? {
         searchKey: aggData.search_key,
-        playerName: aggData.player_name,
-        setName: aggData.set_name,
-        year: aggData.year,
-        sport: aggData.sport,
+        playerName: trustHints && hints?.playerName ? hints.playerName : aggData.player_name,
+        setName: trustHints ? hints?.setName ?? aggData.set_name : aggData.set_name,
+        year: trustHints ? hints?.year ?? aggData.year : aggData.year,
+        sport: trustHints && hints?.sport ? hints.sport : aggData.sport,
         imageUrl: aggData.image_url ?? null,
-        avgPriceCents: aggData.avg_price_cents,
+        avgPriceCents: pcValuation?.currentValueCents ?? aggData.avg_price_cents,
         trend7dPct: aggData.trend_7d_pct ?? 0,
         trend30dPct: aggData.trend_30d_pct ?? null,
-        numSales: aggData.num_sales,
+        numSales: pcValuation?.numSales ?? aggData.num_sales,
       }
     : mockCard!;
 
@@ -450,6 +491,73 @@ async function buildDetailFromSoldRows(
     priceHistory,
     relatedCards,
     soldListings,
+    buySignal: getMockBuyPrice(card),
+    trendReason: getMockTrendReason(card),
+  };
+}
+
+/**
+ * Build a detail payload purely from PC data + local sold_listings. Used when
+ * the caller provided a `pricechartingId` but we have no `price_aggregates`
+ * row yet (common for newly added watchlist/portfolio cards).
+ */
+async function buildDetailFromPriceCharting(
+  searchKey: string,
+  hints: {
+    playerName: string;
+    setName?: string | null;
+    year?: number | null;
+    grade?: string | null;
+    sport?: string;
+  },
+  pc: PortfolioValuation
+) {
+  const card: MarketMover = {
+    searchKey,
+    playerName: hints.playerName,
+    setName: hints.setName ?? null,
+    year: hints.year ?? null,
+    sport: hints.sport ?? "baseball",
+    imageUrl: null,
+    avgPriceCents: pc.currentValueCents,
+    trend7dPct: pc.trend7dPct ?? 0,
+    trend30dPct: pc.trend30dPct ?? null,
+    numSales: pc.numSales,
+  };
+
+  const priceHistory = pc.soldListings
+    .slice()
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((s) => ({ date: s.date, priceCents: s.priceCents }));
+
+  const { data: relatedAggs } = await supabase
+    .from("price_aggregates")
+    .select("*")
+    .eq("sport", card.sport)
+    .neq("search_key", searchKey)
+    .order("trend_7d_pct", { ascending: false, nullsFirst: false })
+    .limit(4);
+
+  const relatedCards: MarketMover[] = relatedAggs?.length
+    ? relatedAggs.map((row: Record<string, unknown>) => ({
+        searchKey: row.search_key as string,
+        playerName: row.player_name as string,
+        setName: row.set_name as string | null,
+        year: row.year as number | null,
+        sport: row.sport as string,
+        imageUrl: (row.image_url as string) ?? null,
+        avgPriceCents: row.avg_price_cents as number,
+        trend7dPct: (row.trend_7d_pct as number) ?? 0,
+        trend30dPct: (row.trend_30d_pct as number) ?? null,
+        numSales: row.num_sales as number,
+      }))
+    : [];
+
+  return {
+    card,
+    priceHistory,
+    relatedCards,
+    soldListings: pc.soldListings,
     buySignal: getMockBuyPrice(card),
     trendReason: getMockTrendReason(card),
   };
@@ -725,9 +833,8 @@ const JUNK_WORDS = new Set([
 ]);
 
 function cleanPlayerName(raw: string): string {
-  let cleaned = raw;
+  let cleaned = stripGrade(raw);
 
-  cleaned = cleaned.replace(/\b(PSA|BGS|SGC|CGC)\s*(?:graded|gem\s*mint|mint|near\s*mint|nm-mt|nm)?\s*\d+\.?\d*/gi, "");
   cleaned = cleaned.replace(/\bgraded\s*\d+\.?\d*/gi, "");
   cleaned = cleaned.replace(/\b(19[5-9]\d|20[0-2]\d)\b/g, "");
   cleaned = cleaned.replace(/\([^)]*\)/g, "");
@@ -1164,6 +1271,7 @@ export interface AddWatchlistCardInput {
   target_price_cents?: number | null;
   notes?: string | null;
   snapshot_price_cents?: number | null;
+  pricecharting_id?: string | null;
 }
 
 function buildSearchKey(
@@ -1217,6 +1325,7 @@ export async function addToWatchlist(input: AddWatchlistCardInput): Promise<Watc
     notes: input.notes ?? null,
     snapshot_price_cents: input.snapshot_price_cents ?? null,
     snapshot_taken_at: input.snapshot_price_cents != null ? now : null,
+    pricecharting_id: input.pricecharting_id ?? null,
   };
 
   const { data, error } = await supabase

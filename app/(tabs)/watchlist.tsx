@@ -82,6 +82,7 @@ function WatchlistRow({
       ...(card.year ? { year: card.year.toString() } : {}),
       ...(card.grade ? { grade: card.grade } : {}),
       sport: card.sport,
+      ...(card.pricecharting_id ? { pc: card.pricecharting_id } : {}),
     }).toString();
     router.push(`/card/${key}?${qs}` as never);
   }, [card]);

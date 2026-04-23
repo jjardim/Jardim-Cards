@@ -88,11 +88,18 @@ export interface WatchlistCard {
   snapshot_taken_at: string | null;
   created_at: string;
   updated_at: string;
+  pricecharting_id: string | null;
 }
 
-export type Sport = "baseball" | "basketball" | "football" | "hockey";
+/**
+ * Categories we support for cards. Historically these were all sports, but
+ * we've left the name as `Sport` to avoid a mass rename. New non-sport
+ * categories (e.g. "pokemon", "formula1", "magic") can be added here
+ * since the underlying DB column is plain `text`, no migration needed.
+ */
+export type Sport = "baseball" | "basketball" | "football" | "hockey" | "pokemon" | "formula1";
 
-export const SPORTS: Sport[] = ["baseball", "basketball", "football", "hockey"];
+export const SPORTS: Sport[] = ["baseball", "basketball", "football", "hockey", "pokemon", "formula1"];
 
 export interface MarketMover {
   searchKey: string;
@@ -115,6 +122,11 @@ export interface CardSearchResult {
   year: number | null;
   cardNumber: string | null;
   sport: string;
+  /**
+   * Canonical grade token parsed from the listing title
+   * (e.g. "PSA 10", "BGS 9.5"). `null` means raw/ungraded or unparseable.
+   */
+  grade: string | null;
   imageUrl: string | null;
   currentPriceCents: number | null;
   trend7dPct: number | null;

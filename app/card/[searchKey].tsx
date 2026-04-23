@@ -35,13 +35,14 @@ function openUrl(url: string) {
 }
 
 export default function CardDetailScreen() {
-  const { searchKey, player, set, year, grade, sport } = useLocalSearchParams<{
+  const { searchKey, player, set, year, grade, sport, pc } = useLocalSearchParams<{
     searchKey: string;
     player?: string;
     set?: string;
     year?: string;
     grade?: string;
     sport?: string;
+    pc?: string;
   }>();
   const router = useRouter();
 
@@ -50,9 +51,12 @@ export default function CardDetailScreen() {
   const yearStr = typeof year === "string" ? year : undefined;
   const gradeStr = typeof grade === "string" ? grade : undefined;
   const sportStr = typeof sport === "string" ? sport : undefined;
+  const pricechartingId = typeof pc === "string" ? pc : undefined;
 
   const { data: detail, isLoading } = useQuery({
-    queryKey: ["card-detail", searchKey],
+    // Grade is part of the cache key because it changes which PC price field
+    // drives the headline (PSA 10 vs raw can be orders of magnitude apart).
+    queryKey: ["card-detail", searchKey, pricechartingId, gradeStr],
     queryFn: () =>
       getCardDetail(
         searchKey ?? "",
@@ -63,6 +67,7 @@ export default function CardDetailScreen() {
               year: yearStr ? parseInt(yearStr) : null,
               grade: gradeStr ?? null,
               sport: sportStr ?? "baseball",
+              pricechartingId: pricechartingId ?? null,
             }
           : undefined
       ),

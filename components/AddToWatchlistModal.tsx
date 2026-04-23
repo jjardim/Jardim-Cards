@@ -14,6 +14,7 @@ import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { palette, radius, shadow, getSportTheme } from "@/lib/theme";
 import { searchEbayCards, addToWatchlist } from "@/lib/api";
+import { lookupCanonicalCard } from "@/lib/pricing/pricecharting";
 import { useToast } from "@/lib/toast-context";
 import { formatCents } from "@/lib/utils";
 import type { CardSearchResult } from "@/lib/types";
@@ -69,18 +70,35 @@ export function AddToWatchlistModal({ visible, onClose }: AddToWatchlistModalPro
   }, [query]);
 
   const handleAdd = useCallback(
-    (card: CardSearchResult) => {
+    async (card: CardSearchResult) => {
       setAddingId(card.id);
-      addMutation.mutate({
+
+      // Enrich from PriceCharting's catalog before saving. eBay's title parser
+      // routinely bungles player_name / sport / set_name; PC gives us a clean,
+      // canonical record we can trust downstream.
+      const canonical = await lookupCanonicalCard({
         player_name: card.playerName,
         set_name: card.setName,
         year: card.year,
         card_number: card.cardNumber,
-        sport: card.sport,
+        ebay_title: card.title,
+      });
+
+      addMutation.mutate({
+        player_name: canonical?.playerName ?? card.playerName,
+        set_name: canonical?.setName ?? card.setName,
+        year: canonical?.year ?? card.year,
+        card_number: canonical?.cardNumber ?? card.cardNumber,
+        sport: canonical?.sport ?? card.sport,
+        // Grade is a user-selected attribute (which slab you own), not
+        // canonical PC metadata — carry through whatever we parsed from the
+        // eBay listing title.
+        grade: card.grade,
         image_url: card.imageUrl,
         ebay_title: card.title,
         ebay_item_id: card.id,
         snapshot_price_cents: card.currentPriceCents,
+        pricecharting_id: canonical?.pricechartingId ?? null,
       });
     },
     [addMutation]
@@ -392,6 +410,29 @@ export function AddToWatchlistModal({ visible, onClose }: AddToWatchlistModalPro
                       >
                         {card.playerName}
                       </Text>
+                      {card.grade && (
+                        <View
+                          style={{
+                            alignSelf: "flex-start",
+                            backgroundColor: palette.bgMuted,
+                            borderRadius: radius.pill,
+                            paddingHorizontal: 8,
+                            paddingVertical: 2,
+                            marginTop: 4,
+                          }}
+                        >
+                          <Text
+                            style={{
+                              fontSize: 10,
+                              fontWeight: "700",
+                              color: palette.text,
+                              letterSpacing: 0.3,
+                            }}
+                          >
+                            {card.grade}
+                          </Text>
+                        </View>
+                      )}
                       {card.currentPriceCents != null && (
                         <Text
                           style={{

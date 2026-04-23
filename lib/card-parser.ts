@@ -1,3 +1,5 @@
+import { extractGrade } from "./parsing/grade";
+
 export interface ParsedCardData {
   playerName: string | null;
   setName: string | null;
@@ -83,17 +85,3 @@ function extractCardNumber(text: string): string | null {
   return null;
 }
 
-function extractGrade(text: string): string | null {
-  const patterns = [
-    /(PSA\s*\d{1,2}(\.\d)?)/i,
-    /(BGS\s*\d{1,2}(\.\d)?)/i,
-    /(SGC\s*\d{1,2}(\.\d)?)/i,
-    /(CGC\s*\d{1,2}(\.\d)?)/i,
-    /GEM\s*MINT\s*(\d{1,2})/i,
-  ];
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match) return match[1] ?? match[0];
-  }
-  return null;
-}

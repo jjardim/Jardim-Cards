@@ -94,6 +94,11 @@ export default function SearchScreen() {
                 <Text style={{ fontSize: 13, color: "#71717a", marginTop: 2 }}>
                   {card.setName ?? card.title} {card.year ? `(${card.year})` : ""} {card.cardNumber ? `#${card.cardNumber}` : ""}
                 </Text>
+                {card.grade && (
+                  <View style={{ alignSelf: "flex-start", backgroundColor: "#18181b", borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2, marginTop: 6 }}>
+                    <Text style={{ fontSize: 10, fontWeight: "700", color: "#fff", letterSpacing: 0.3 }}>{card.grade}</Text>
+                  </View>
+                )}
                 <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
                   <Text style={{ fontSize: 18, fontWeight: "700", color: "#18181b" }}>
                     {card.currentPriceCents ? formatCents(card.currentPriceCents) : "N/A"}

@@ -40,9 +40,9 @@ export const MOCK_TRENDING: MarketMover[] = [
 ];
 
 export const MOCK_SEARCH_RESULTS: CardSearchResult[] = [
-  { id: "mock-1", title: "1993 SP Derek Jeter Foil #279 RC", playerName: "Derek Jeter", setName: "1993 SP", year: 1993, cardNumber: "279", sport: "baseball", imageUrl: null, currentPriceCents: 285000, trend7dPct: 12.5, source: "mock" },
-  { id: "mock-2", title: "2011 Topps Update Mike Trout #US175 RC", playerName: "Mike Trout", setName: "2011 Topps Update", year: 2011, cardNumber: "US175", sport: "baseball", imageUrl: null, currentPriceCents: 45000, trend7dPct: 8.2, source: "mock" },
-  { id: "mock-3", title: "1952 Topps Mickey Mantle #311", playerName: "Mickey Mantle", setName: "1952 Topps", year: 1952, cardNumber: "311", sport: "baseball", imageUrl: null, currentPriceCents: 1250000, trend7dPct: 5.1, source: "mock" },
+  { id: "mock-1", title: "1993 SP Derek Jeter Foil #279 RC", playerName: "Derek Jeter", setName: "1993 SP", year: 1993, cardNumber: "279", sport: "baseball", grade: null, imageUrl: null, currentPriceCents: 285000, trend7dPct: 12.5, source: "mock" },
+  { id: "mock-2", title: "2011 Topps Update Mike Trout #US175 RC", playerName: "Mike Trout", setName: "2011 Topps Update", year: 2011, cardNumber: "US175", sport: "baseball", grade: null, imageUrl: null, currentPriceCents: 45000, trend7dPct: 8.2, source: "mock" },
+  { id: "mock-3", title: "1952 Topps Mickey Mantle #311", playerName: "Mickey Mantle", setName: "1952 Topps", year: 1952, cardNumber: "311", sport: "baseball", grade: null, imageUrl: null, currentPriceCents: 1250000, trend7dPct: 5.1, source: "mock" },
 ];
 
 export function generateMockPriceHistory(basePriceCents: number, days: number = 90): PriceHistoryPoint[] {

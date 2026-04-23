@@ -123,6 +123,8 @@ export const sportTheme: Record<
   football: { color: "#8b5cf6", bg: "#ede9fe", emoji: "\uD83C\uDFC8", label: "Football" },
   hockey: { color: "#06b6d4", bg: "#cffafe", emoji: "\uD83C\uDFD2", label: "Hockey" },
   soccer: { color: "#22c55e", bg: "#dcfce7", emoji: "\u26BD", label: "Soccer" },
+  pokemon: { color: "#eab308", bg: "#fef9c3", emoji: "\u2728", label: "Pok\u00E9mon" },
+  formula1: { color: "#dc2626", bg: "#fee2e2", emoji: "\uD83C\uDFCE", label: "Formula 1" },
 };
 
 export function getSportTheme(sport: string | null | undefined) {
