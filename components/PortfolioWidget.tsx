@@ -46,6 +46,8 @@ export function PortfolioWidget() {
             grade: card.grade,
             image_url: card.image_url,
             ebay_title: card.ebay_title,
+            id: card.id,
+            pricecharting_id: card.pricecharting_id,
           });
         })
       );

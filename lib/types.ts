@@ -40,6 +40,7 @@ export interface PriceAggregate {
   trend_7d_pct: number | null;
   trend_30d_pct: number | null;
   last_computed_at: string;
+  pricecharting_id: string | null;
 }
 
 export interface PortfolioCard {
@@ -64,6 +65,7 @@ export interface PortfolioCard {
   notes: string | null;
   created_at: string;
   updated_at: string;
+  pricecharting_id: string | null;
 }
 
 export interface WatchlistCard {

@@ -9,8 +9,16 @@ import {
   getBuyPrice as getMockBuyPrice,
   getTrendReason as getMockTrendReason,
 } from "./mock-data";
+import { fetchPortfolioValuationFromPriceCharting } from "./pricing/pricecharting";
 
 const USE_MOCK = false;
+
+/**
+ * When true, portfolio valuations are sourced from SportsCardsPro/PriceCharting
+ * instead of eBay sold comps. On null / zero result we fall back to the eBay
+ * path, so flipping this flag is safe. A/B by flipping per-environment.
+ */
+const USE_PRICECHARTING = true;
 
 interface EbaySearchItem {
   id: string;
@@ -581,11 +589,30 @@ export async function fetchPortfolioValuation(card: {
   grade?: string | null;
   image_url?: string | null;
   ebay_title?: string | null;
+  id?: string;
+  pricecharting_id?: string | null;
 }): Promise<PortfolioValuation | null> {
   const query = buildValuationQuery(card);
 
   const cached = valuationCache.get(query);
   if (cached && Date.now() - cached.ts < VALUATION_TTL) return cached.data;
+
+  if (USE_PRICECHARTING) {
+    const pcResult = await fetchPortfolioValuationFromPriceCharting({
+      player_name: card.player_name,
+      set_name: card.set_name,
+      year: card.year,
+      card_number: card.card_number,
+      grade: card.grade,
+      id: card.id,
+      pricecharting_id: card.pricecharting_id,
+    });
+    if (pcResult && pcResult.currentValueCents > 0) {
+      valuationCache.set(query, { data: pcResult, ts: Date.now() });
+      return pcResult;
+    }
+    // fall through to eBay path on null / zero
+  }
 
   if (USE_MOCK) {
     const baseCents = 3000 + Math.floor(Math.random() * 8000);
