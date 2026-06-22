@@ -43,6 +43,16 @@ export interface PriceAggregate {
   pricecharting_id: string | null;
 }
 
+export interface PortfolioSnapshot {
+  id: string;
+  user_id: string;
+  snapshot_date: string;
+  total_value_cents: number;
+  total_cost_cents: number;
+  card_count: number;
+  created_at: string;
+}
+
 export interface PortfolioCard {
   id: string;
   user_id: string;

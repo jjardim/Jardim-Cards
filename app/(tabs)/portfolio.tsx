@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState, useMemo } from "react";
+import { useRef, useCallback, useState, useMemo, useEffect } from "react";
 import {
   View,
   Text,
@@ -35,6 +35,11 @@ import type { PortfolioCard } from "@/lib/types";
 import type { PortfolioValuation, SoldListing } from "@/lib/api";
 import { palette, radius, shadow, getSportTheme } from "@/lib/theme";
 import { PLBar } from "@/components/PLBar";
+import { PortfolioValueChart } from "@/components/PortfolioValueChart";
+import {
+  fetchPortfolioSnapshots,
+  upsertPortfolioSnapshot,
+} from "@/lib/portfolio-snapshots";
 
 const TREND_COLORS = { green: palette.success, red: palette.danger, gray: palette.textSubtle } as const;
 
@@ -648,6 +653,79 @@ export default function PortfolioScreen() {
     [targetProfitPct]
   );
 
+  const totalInvested = useMemo(
+    () => cards.reduce((sum, c) => sum + c.purchase_price_cents * c.quantity, 0),
+    [cards]
+  );
+  const totalCards = useMemo(
+    () => cards.reduce((sum, c) => sum + c.quantity, 0),
+    [cards]
+  );
+  const totalCurrentValue = useMemo(
+    () =>
+      cards.reduce((sum, c) => {
+        const v = valuations[c.id];
+        return sum + (v ? v.currentValueCents * c.quantity : 0);
+      }, 0),
+    [cards, valuations]
+  );
+  const hasValuations = useMemo(
+    () => Object.values(valuations).some(Boolean),
+    [valuations]
+  );
+  const totalPL = useMemo(
+    () => (hasValuations ? totalCurrentValue - totalInvested : null),
+    [hasValuations, totalCurrentValue, totalInvested]
+  );
+  const totalPLColor =
+    totalPL !== null
+      ? totalPL >= 0
+        ? TREND_COLORS.green
+        : TREND_COLORS.red
+      : TREND_COLORS.gray;
+
+  const { data: snapshots = [] } = useQuery({
+    queryKey: ["portfolio-snapshots", user?.id],
+    queryFn: async () => {
+      if (!user) return [];
+      return fetchPortfolioSnapshots(user.id);
+    },
+    enabled: !!user,
+    staleTime: 1000 * 60 * 5,
+  });
+
+  const snapshotSyncedRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!user || !hasValuations || valuationsLoading || cards.length === 0) return;
+
+    const syncKey = `${user.id}:${totalCurrentValue}:${totalInvested}:${totalCards}`;
+    if (snapshotSyncedRef.current === syncKey) return;
+
+    snapshotSyncedRef.current = syncKey;
+    upsertPortfolioSnapshot({
+      userId: user.id,
+      totalValueCents: totalCurrentValue,
+      totalCostCents: totalInvested,
+      cardCount: totalCards,
+    })
+      .then(() => {
+        queryClient.invalidateQueries({ queryKey: ["portfolio-snapshots", user.id] });
+      })
+      .catch(() => {
+        snapshotSyncedRef.current = null;
+      });
+  }, [
+    user,
+    hasValuations,
+    valuationsLoading,
+    cards.length,
+    totalCurrentValue,
+    totalInvested,
+    totalCards,
+    queryClient,
+  ]);
+
   if (authLoading) {
     return (
       <View
@@ -703,19 +781,6 @@ export default function PortfolioScreen() {
       </View>
     );
   }
-
-  const totalInvested = cards.reduce((sum, c) => sum + c.purchase_price_cents * c.quantity, 0);
-  const totalCards = cards.reduce((sum, c) => sum + c.quantity, 0);
-
-  const totalCurrentValue = cards.reduce((sum, c) => {
-    const v = valuations[c.id];
-    return sum + (v ? v.currentValueCents * c.quantity : 0);
-  }, 0);
-  const hasValuations = Object.values(valuations).some(Boolean);
-  const totalPL = hasValuations ? totalCurrentValue - totalInvested : null;
-  const totalPLColor = totalPL !== null
-    ? totalPL >= 0 ? TREND_COLORS.green : TREND_COLORS.red
-    : TREND_COLORS.gray;
 
   return (
     <>
@@ -827,6 +892,10 @@ export default function PortfolioScreen() {
                 )}
               </PortfolioStat>
             </View>
+          )}
+
+          {hasValuations && snapshots.length > 0 && (
+            <PortfolioValueChart snapshots={snapshots} />
           )}
 
           <Text
