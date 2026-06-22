@@ -23,6 +23,10 @@ export interface CardValuationInput {
   pricecharting_id?: string | null;
 }
 
+export interface ValuationFetchOptions {
+  forceRefresh?: boolean;
+}
+
 type GradeHint = { grade?: string | null; ebay_title?: string | null };
 
 export type ValuationCardSource = Pick<

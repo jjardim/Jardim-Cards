@@ -11,18 +11,21 @@ import {
   Platform,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { LineChart } from "react-native-gifted-charts";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { TrendBadge } from "@/components/TrendBadge";
 import { CardImage } from "@/components/CardImage";
 import { formatCents, formatPct } from "@/lib/utils";
-import { getCardDetail, fetchActiveListingsForCard, fetchCardValuation } from "@/lib/api";
+import { getCardDetail, fetchActiveListingsForCard, fetchCardValuation, clearValuationCache } from "@/lib/api";
 import type { SoldListing, ActiveListing } from "@/lib/api";
 import { toValuationInput } from "@/lib/valuation";
 import { ValuationHeader } from "@/components/ValuationBlock";
 import { formatCompStatsLabel } from "@/lib/pricing/comp-match";
 import { palette, radius, shadow, getSportTheme } from "@/lib/theme";
+import { useAuth } from "@/lib/auth-context";
+import { consumeRefreshQuota, getRefreshQuota } from "@/lib/valuation-refresh";
+import { useToast } from "@/lib/toast-context";
 
 const CHART_WIDTH = Dimensions.get("window").width - 64;
 
@@ -48,6 +51,9 @@ export default function CardDetailScreen() {
     pc?: string;
   }>();
   const router = useRouter();
+  const { user } = useAuth();
+  const { showToast } = useToast();
+  const queryClient = useQueryClient();
 
   const playerStr = typeof player === "string" ? player : undefined;
   const setStr = typeof set === "string" ? set : undefined;
@@ -84,24 +90,74 @@ export default function CardDetailScreen() {
   const buySignal = detail?.buySignal ?? null;
   const trendReason = detail?.trendReason ?? "";
 
+  const valuationInput = useMemo(
+    () =>
+      card
+        ? toValuationInput({
+            player_name: playerStr ?? card.playerName,
+            set_name: setStr ?? card.setName,
+            year: yearStr ? parseInt(yearStr, 10) : card.year,
+            card_number: null,
+            grade: gradeStr ?? null,
+            image_url: card.imageUrl,
+            ebay_title: null,
+            pricecharting_id: pricechartingId ?? null,
+          })
+        : null,
+    [card, playerStr, setStr, yearStr, gradeStr, pricechartingId]
+  );
+
+  const valuationQueryKey = [
+    "card-valuation",
+    searchKey,
+    pricechartingId,
+    gradeStr,
+    playerStr,
+  ] as const;
+
   const { data: valuation, isLoading: valuationLoading } = useQuery({
-    queryKey: ["card-valuation", searchKey, pricechartingId, gradeStr, playerStr],
-    queryFn: () =>
-      fetchCardValuation(
-        toValuationInput({
-          player_name: playerStr ?? card!.playerName,
-          set_name: setStr ?? card!.setName,
-          year: yearStr ? parseInt(yearStr, 10) : card!.year,
-          card_number: null,
-          grade: gradeStr ?? null,
-          image_url: card!.imageUrl,
-          ebay_title: null,
-          pricecharting_id: pricechartingId ?? null,
-        })
-      ),
-    enabled: !!card,
+    queryKey: valuationQueryKey,
+    queryFn: () => fetchCardValuation(valuationInput!),
+    enabled: !!valuationInput,
     staleTime: 1000 * 60 * 15,
   });
+
+  const { data: refreshQuota } = useQuery({
+    queryKey: ["refresh-quota", user?.id],
+    queryFn: async () => {
+      if (!user) return null;
+      return getRefreshQuota(user.id);
+    },
+    enabled: !!user,
+    staleTime: 1000 * 30,
+  });
+
+  const refreshValuationMutation = useMutation({
+    mutationFn: async () => {
+      if (!user) throw new Error("Sign in to refresh prices");
+      if (!valuationInput) throw new Error("Card not loaded");
+
+      const consumed = await consumeRefreshQuota(user.id, "card");
+      if (!consumed.ok) {
+        throw new Error(consumed.message ?? "No refreshes left today");
+      }
+
+      clearValuationCache();
+      return fetchCardValuation(valuationInput, { forceRefresh: true });
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(valuationQueryKey, data);
+      queryClient.invalidateQueries({ queryKey: ["refresh-quota", user?.id] });
+      showToast("Price refreshed");
+    },
+    onError: (error: Error) => {
+      showToast(error.message);
+    },
+  });
+
+  const handleRefreshValuation = useCallback(() => {
+    refreshValuationMutation.mutate();
+  }, [refreshValuationMutation]);
 
   const headlineCents = valuation?.currentValueCents ?? card?.avgPriceCents ?? 0;
   const trend7dPct = valuation?.trend7dPct ?? card?.trend7dPct ?? null;
@@ -341,6 +397,36 @@ export default function CardDetailScreen() {
                   >
                     {formatCompStatsLabel(valuation)}
                   </Text>
+                  {user ? (
+                    <TouchableOpacity
+                      onPress={handleRefreshValuation}
+                      disabled={
+                        refreshValuationMutation.isPending ||
+                        (!refreshQuota?.isPro && refreshQuota?.remaining === 0)
+                      }
+                      activeOpacity={0.85}
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 5,
+                        marginTop: 8,
+                        alignSelf: "flex-end",
+                        opacity:
+                          !refreshQuota?.isPro && refreshQuota?.remaining === 0 ? 0.45 : 1,
+                      }}
+                    >
+                      {refreshValuationMutation.isPending ? (
+                        <ActivityIndicator size="small" color={palette.primary} />
+                      ) : (
+                        <FontAwesome name="refresh" size={11} color={palette.primary} />
+                      )}
+                      <Text style={{ fontSize: 11, color: palette.primary, fontWeight: "700" }}>
+                        {refreshQuota?.isPro
+                          ? "Refresh"
+                          : `${refreshQuota?.remaining ?? "—"} left today`}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : null}
                 </>
               ) : (
                 <>

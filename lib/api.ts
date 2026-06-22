@@ -23,6 +23,7 @@ import { extractGrade, stripGrade } from "./parsing/grade";
 import type { CompMatchLevel, ValuationPriceSource } from "./types";
 import {
   type CardValuationInput,
+  type ValuationFetchOptions,
   hasRequestedGrade,
   normalizePlayerNameForSearch,
   resolveCardGrade,
@@ -699,6 +700,11 @@ export async function fetchActiveListingsForCard(card: {
 const valuationCache = new Map<string, { data: PortfolioValuation; ts: number }>();
 const VALUATION_TTL = 1000 * 60 * 30; // 30 min
 
+/** Clear in-memory valuation cache (e.g. before a manual refresh). */
+export function clearValuationCache(): void {
+  valuationCache.clear();
+}
+
 function cleanSetName(raw: string | null | undefined): string | null {
   if (!raw) return null;
   return raw
@@ -852,8 +858,10 @@ async function fetchEbayValuationOnly(input: CardValuationInput): Promise<Portfo
 }
 
 export async function fetchPortfolioValuation(
-  card: CardValuationInput
+  card: CardValuationInput,
+  options?: ValuationFetchOptions
 ): Promise<PortfolioValuation | null> {
+  const forceRefresh = options?.forceRefresh ?? false;
   const input: CardValuationInput = {
     ...card,
     grade: resolveCardGrade({ grade: card.grade, ebay_title: card.ebay_title }),
@@ -862,10 +870,12 @@ export async function fetchPortfolioValuation(
   const query = buildValuationQuery(input);
   const cacheKey = buildValuationCacheKey(input);
 
-  const cached = valuationCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < VALUATION_TTL && acceptValuation(cached.data, input.grade)) {
-    logValuationCacheHit({ input, query, valuation: cached.data });
-    return cached.data;
+  if (!forceRefresh) {
+    const cached = valuationCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < VALUATION_TTL && acceptValuation(cached.data, input.grade)) {
+      logValuationCacheHit({ input, query, valuation: cached.data });
+      return cached.data;
+    }
   }
 
   const devCompare = isValuationDevLogEnabled() && USE_PRICECHARTING && !USE_MOCK;
@@ -960,12 +970,14 @@ export async function fetchPortfolioValuation(
   }
 
   try {
-    // Try Supabase cached data first (sold_listings + price_aggregates)
-    const dbResult = await fetchValuationFromDB(input);
-    if (acceptValuation(dbResult, input.grade)) {
-      valuationCache.set(cacheKey, { data: dbResult, ts: Date.now() });
-      refreshValuationFromAPI(query, input).catch(() => {});
-      return dbResult;
+    if (!forceRefresh) {
+      // Try Supabase cached data first (sold_listings + price_aggregates)
+      const dbResult = await fetchValuationFromDB(input);
+      if (acceptValuation(dbResult, input.grade)) {
+        valuationCache.set(cacheKey, { data: dbResult, ts: Date.now() });
+        refreshValuationFromAPI(query, input).catch(() => {});
+        return dbResult;
+      }
     }
 
     const apiResult = await refreshValuationFromAPI(query, input);
@@ -981,14 +993,16 @@ export async function fetchPortfolioValuation(
 
       if (variantQuery === query) continue;
 
-      const variantCached = valuationCache.get(variantCacheKey);
-      if (
-        variantCached &&
-        Date.now() - variantCached.ts < VALUATION_TTL &&
-        acceptValuation(variantCached.data, input.grade)
-      ) {
-        valuationCache.set(cacheKey, { data: variantCached.data, ts: Date.now() });
-        return variantCached.data;
+      if (!forceRefresh) {
+        const variantCached = valuationCache.get(variantCacheKey);
+        if (
+          variantCached &&
+          Date.now() - variantCached.ts < VALUATION_TTL &&
+          acceptValuation(variantCached.data, input.grade)
+        ) {
+          valuationCache.set(cacheKey, { data: variantCached.data, ts: Date.now() });
+          return variantCached.data;
+        }
       }
 
       const variantResult = await refreshValuationFromAPI(variantQuery, variant);
@@ -1595,7 +1609,7 @@ export interface UpdateWatchlistCardInput {
 /** Alias — prefer this name in new code. Same as `fetchPortfolioValuation`. */
 export const fetchCardValuation = fetchPortfolioValuation;
 
-export { toValuationInput, resolveCardGrade, type CardValuationInput } from "./valuation";
+export { toValuationInput, resolveCardGrade, type CardValuationInput, type ValuationFetchOptions } from "./valuation";
 
 /** @deprecated Use resolveCardGrade from `@/lib/valuation` */
 export const resolveWatchlistGrade = resolveCardGrade;

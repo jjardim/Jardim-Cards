@@ -8,6 +8,7 @@ import {
   Animated,
   Platform,
   ActivityIndicator,
+  RefreshControl,
 } from "react-native";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -17,7 +18,7 @@ import { CardImage } from "@/components/CardImage";
 import { EditCardModal } from "@/components/EditCardModal";
 import { SalesModal } from "@/components/SalesModal";
 import { formatCents, formatPct, trendColor } from "@/lib/utils";
-import { fetchPortfolioValuation } from "@/lib/api";
+import { fetchPortfolioValuation, clearValuationCache } from "@/lib/api";
 import { toValuationInput } from "@/lib/valuation";
 import {
   countPortfolioFilterMatches,
@@ -36,10 +37,13 @@ import type { PortfolioValuation, SoldListing } from "@/lib/api";
 import { palette, radius, shadow, getSportTheme } from "@/lib/theme";
 import { PLBar } from "@/components/PLBar";
 import { PortfolioValueChart } from "@/components/PortfolioValueChart";
+import { ValuationRefreshButton } from "@/components/ValuationRefreshButton";
 import {
   fetchPortfolioSnapshots,
   upsertPortfolioSnapshot,
 } from "@/lib/portfolio-snapshots";
+import { consumeRefreshQuota, getRefreshQuota } from "@/lib/valuation-refresh";
+import { useToast } from "@/lib/toast-context";
 
 const TREND_COLORS = { green: palette.success, red: palette.danger, gray: palette.textSubtle } as const;
 
@@ -539,6 +543,7 @@ function PortfolioCardRow({
 export default function PortfolioScreen() {
   const { user, loading: authLoading } = useAuth();
   const { targetProfitPct } = useUserPreferences();
+  const { showToast } = useToast();
   const queryClient = useQueryClient();
   const [portfolioFilter, setPortfolioFilter] = useState<PortfolioFilter>("all");
   const [editingCard, setEditingCard] = useState<PortfolioCard | null>(null);
@@ -694,6 +699,56 @@ export default function PortfolioScreen() {
     staleTime: 1000 * 60 * 5,
   });
 
+  const { data: refreshQuota } = useQuery({
+    queryKey: ["refresh-quota", user?.id],
+    queryFn: async () => {
+      if (!user) return null;
+      return getRefreshQuota(user.id);
+    },
+    enabled: !!user,
+    staleTime: 1000 * 30,
+  });
+
+  const refreshPricesMutation = useMutation({
+    mutationFn: async () => {
+      if (!user) throw new Error("Sign in to refresh prices");
+      const consumed = await consumeRefreshQuota(user.id, "portfolio");
+      if (!consumed.ok) {
+        throw new Error(consumed.message ?? "No refreshes left today");
+      }
+
+      clearValuationCache();
+      const results: Record<string, PortfolioValuation | null> = {};
+      await Promise.all(
+        cards.map(async (card) => {
+          results[card.id] = await fetchPortfolioValuation(toValuationInput(card), {
+            forceRefresh: true,
+          });
+        })
+      );
+      return results;
+    },
+    onSuccess: (results) => {
+      queryClient.setQueryData(
+        ["portfolio-valuations", cards.map((c) => c.id).join(",")],
+        results
+      );
+      queryClient.invalidateQueries({ queryKey: ["refresh-quota", user?.id] });
+      showToast("Prices refreshed");
+    },
+    onError: (error: Error) => {
+      showToast(error.message);
+    },
+  });
+
+  const handleRefreshPrices = useCallback(() => {
+    if (cards.length === 0) {
+      showToast("Add cards to refresh prices");
+      return;
+    }
+    refreshPricesMutation.mutate();
+  }, [cards.length, refreshPricesMutation, showToast]);
+
   const snapshotSyncedRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -784,7 +839,16 @@ export default function PortfolioScreen() {
 
   return (
     <>
-      <ScrollView style={{ flex: 1, backgroundColor: palette.bg }}>
+      <ScrollView
+        style={{ flex: 1, backgroundColor: palette.bg }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshPricesMutation.isPending}
+            onRefresh={handleRefreshPrices}
+            tintColor={palette.textSubtle}
+          />
+        }
+      >
         <View style={{ padding: 16 }}>
           <View
             style={{
@@ -891,6 +955,16 @@ export default function PortfolioScreen() {
                   </Text>
                 )}
               </PortfolioStat>
+            </View>
+          )}
+
+          {cards.length > 0 && (
+            <View style={{ marginTop: 12 }}>
+              <ValuationRefreshButton
+                quota={refreshQuota ?? undefined}
+                loading={refreshPricesMutation.isPending || valuationsLoading}
+                onPress={handleRefreshPrices}
+              />
             </View>
           )}
 
