@@ -16,8 +16,11 @@ const COLORS = {
 export function TrendBadge({ pct, size = "sm" }: TrendBadgeProps) {
   const color = trendColor(pct);
   const scheme = COLORS[color];
-  const arrow = pct !== null ? (pct >= 0 ? "\u2191" : "\u2193") : "";
   const isMd = size === "md";
+  // Null = "no 7d baseline yet" — render an em dash instead of misleading
+  // 0%/N-A. Once recompute-trends has been running for 7+ days this should
+  // be rare for any card in price_aggregates.
+  const label = pct === null ? "\u2014" : `${pct >= 0 ? "\u2191" : "\u2193"} ${formatPct(pct)}`;
 
   return (
     <View
@@ -37,7 +40,7 @@ export function TrendBadge({ pct, size = "sm" }: TrendBadgeProps) {
           fontWeight: "700",
         }}
       >
-        {arrow} {formatPct(pct)}
+        {label}
       </Text>
     </View>
   );

@@ -5,6 +5,7 @@ import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { AnimatedNumber } from "./AnimatedNumber";
 import { formatCents } from "@/lib/utils";
 import { fetchPortfolioValuation } from "@/lib/api";
+import { toValuationInput } from "@/lib/valuation";
 import type { PortfolioValuation } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
@@ -38,17 +39,7 @@ export function PortfolioWidget() {
       const results: Record<string, PortfolioValuation | null> = {};
       await Promise.all(
         cards.map(async (card) => {
-          results[card.id] = await fetchPortfolioValuation({
-            player_name: card.player_name,
-            set_name: card.set_name,
-            year: card.year,
-            card_number: card.card_number,
-            grade: card.grade,
-            image_url: card.image_url,
-            ebay_title: card.ebay_title,
-            id: card.id,
-            pricecharting_id: card.pricecharting_id,
-          });
+          results[card.id] = await fetchPortfolioValuation(toValuationInput(card));
         })
       );
       return results;

@@ -12,9 +12,18 @@ interface HottestHeroProps {
 
 export function HottestHero({ card, onPress }: HottestHeroProps) {
   const sport = getSportTheme(card.sport);
-  const isGainer = (card.trend7dPct ?? 0) >= 0;
-  const deltaColor = isGainer ? "#4ade80" : "#fb7185";
-  const deltaBg = isGainer ? "rgba(74,222,128,0.15)" : "rgba(251,113,133,0.15)";
+  const hasTrend = card.trend7dPct !== null;
+  const isGainer = hasTrend && (card.trend7dPct ?? 0) >= 0;
+  const deltaColor = !hasTrend
+    ? palette.textInverseMuted
+    : isGainer
+      ? "#4ade80"
+      : "#fb7185";
+  const deltaBg = !hasTrend
+    ? "rgba(255,255,255,0.10)"
+    : isGainer
+      ? "rgba(74,222,128,0.15)"
+      : "rgba(251,113,133,0.15)";
 
   return (
     <TouchableOpacity
@@ -176,13 +185,15 @@ export function HottestHero({ card, onPress }: HottestHeroProps) {
                   borderRadius: radius.pill,
                 }}
               >
-                <FontAwesome
-                  name={isGainer ? "arrow-up" : "arrow-down"}
-                  size={9}
-                  color={deltaColor}
-                />
+                {hasTrend && (
+                  <FontAwesome
+                    name={isGainer ? "arrow-up" : "arrow-down"}
+                    size={9}
+                    color={deltaColor}
+                  />
+                )}
                 <Text style={{ fontSize: 11, fontWeight: "700", color: deltaColor }}>
-                  {formatPct(card.trend7dPct)}
+                  {hasTrend ? formatPct(card.trend7dPct) : "\u2014 no 7d data yet"}
                 </Text>
               </View>
               <Text style={{ fontSize: 10, color: palette.textInverseMuted }}>

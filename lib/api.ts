@@ -9,8 +9,26 @@ import {
   getBuyPrice as getMockBuyPrice,
   getTrendReason as getMockTrendReason,
 } from "./mock-data";
-import { fetchPortfolioValuationFromPriceCharting } from "./pricing/pricecharting";
+import {
+  buildMatchLabel,
+  computeEbayMatchLevel,
+  filterSoldListingsByComp,
+  type CardCompCriteria,
+} from "./pricing/comp-match";
+import { fetchPortfolioValuationFromPriceCharting, lookupCanonicalCard } from "./pricing/pricecharting";
 import { extractGrade, stripGrade } from "./parsing/grade";
+import type { CompMatchLevel, ValuationPriceSource } from "./types";
+import {
+  type CardValuationInput,
+  resolveCardGrade,
+  toValuationInput,
+} from "./valuation";
+import {
+  isValuationDevLogEnabled,
+  logValuationCacheHit,
+  logValuationCompare,
+  valuationToLogSnapshot,
+} from "./pricing/valuation-dev-log";
 
 const USE_MOCK = false;
 
@@ -125,8 +143,10 @@ async function fetchTrendingFromDB(
       sport: row.sport as string,
       imageUrl: (row.image_url as string) ?? null,
       avgPriceCents: row.avg_price_cents as number,
-      trend7dPct: (row.trend_7d_pct as number) ?? 0,
-      trend30dPct: (row.trend_30d_pct as number) ?? null,
+      // Preserve null when no 7d baseline exists. UI renders "\u2014" for null
+      // and excludes nulls from gainer/loser lists. Coercing to 0 was lying.
+      trend7dPct: (row.trend_7d_pct as number | null) ?? null,
+      trend30dPct: (row.trend_30d_pct as number | null) ?? null,
       numSales: row.num_sales as number,
     }));
   } catch {
@@ -314,7 +334,7 @@ export async function getCardDetail(
             sport: hints?.sport ?? "baseball",
             imageUrl: null,
             avgPriceCents: 0,
-            trend7dPct: 0,
+            trend7dPct: null,
             trend30dPct: null,
             numSales: 0,
           } as MarketMover,
@@ -358,7 +378,7 @@ export async function getCardDetail(
         sport: trustHints && hints?.sport ? hints.sport : aggData.sport,
         imageUrl: aggData.image_url ?? null,
         avgPriceCents: pcValuation?.currentValueCents ?? aggData.avg_price_cents,
-        trend7dPct: aggData.trend_7d_pct ?? 0,
+        trend7dPct: aggData.trend_7d_pct ?? null,
         trend30dPct: aggData.trend_30d_pct ?? null,
         numSales: pcValuation?.numSales ?? aggData.num_sales,
       }
@@ -408,8 +428,8 @@ export async function getCardDetail(
         sport: row.sport as string,
         imageUrl: (row.image_url as string) ?? null,
         avgPriceCents: row.avg_price_cents as number,
-        trend7dPct: (row.trend_7d_pct as number) ?? 0,
-        trend30dPct: (row.trend_30d_pct as number) ?? null,
+        trend7dPct: (row.trend_7d_pct as number | null) ?? null,
+        trend30dPct: (row.trend_30d_pct as number | null) ?? null,
         numSales: row.num_sales as number,
       }))
     : getMockRelated(card);
@@ -441,7 +461,7 @@ async function buildDetailFromSoldRows(
     sport: hints?.sport ?? (first.sport as string) ?? "baseball",
     imageUrl: (first.image_url as string) ?? null,
     avgPriceCents: avg,
-    trend7dPct: 0,
+    trend7dPct: null,
     trend30dPct: null,
     numSales: soldRows.length,
   };
@@ -480,8 +500,8 @@ async function buildDetailFromSoldRows(
         sport: row.sport as string,
         imageUrl: (row.image_url as string) ?? null,
         avgPriceCents: row.avg_price_cents as number,
-        trend7dPct: (row.trend_7d_pct as number) ?? 0,
-        trend30dPct: (row.trend_30d_pct as number) ?? null,
+        trend7dPct: (row.trend_7d_pct as number | null) ?? null,
+        trend30dPct: (row.trend_30d_pct as number | null) ?? null,
         numSales: row.num_sales as number,
       }))
     : [];
@@ -520,8 +540,8 @@ async function buildDetailFromPriceCharting(
     sport: hints.sport ?? "baseball",
     imageUrl: null,
     avgPriceCents: pc.currentValueCents,
-    trend7dPct: pc.trend7dPct ?? 0,
-    trend30dPct: pc.trend30dPct ?? null,
+    trend7dPct: pc.trend7dPct,
+    trend30dPct: pc.trend30dPct,
     numSales: pc.numSales,
   };
 
@@ -547,8 +567,8 @@ async function buildDetailFromPriceCharting(
         sport: row.sport as string,
         imageUrl: (row.image_url as string) ?? null,
         avgPriceCents: row.avg_price_cents as number,
-        trend7dPct: (row.trend_7d_pct as number) ?? 0,
-        trend30dPct: (row.trend_30d_pct as number) ?? null,
+        trend7dPct: (row.trend_7d_pct as number | null) ?? null,
+        trend30dPct: (row.trend_30d_pct as number | null) ?? null,
         numSales: row.num_sales as number,
       }))
     : [];
@@ -611,6 +631,15 @@ export interface PortfolioValuation {
   recentSales: { priceCents: number; date: string }[];
   soldListings: SoldListing[];
   activeListings: ActiveListing[];
+  /** How closely comps match the owned card — see product-vision.mdc */
+  matchLevel: CompMatchLevel;
+  priceSource: ValuationPriceSource;
+  gradeTierUsed: string | null;
+  compCountGradeSpecific: number;
+  /** PC catalog salesVolume — all grades, not grade-specific */
+  catalogVolume: number | null;
+  matchLabel: string;
+  usedRawFallback: boolean;
 }
 
 function filterByTitleTerm<T extends { title: string }>(
@@ -689,34 +718,174 @@ function buildValuationQuery(card: {
   ].filter(Boolean).join(" ");
 }
 
-export async function fetchPortfolioValuation(card: {
+function buildValuationCacheKey(card: {
   player_name: string;
   set_name?: string | null;
   year?: number | null;
   card_number?: string | null;
   grade?: string | null;
-  image_url?: string | null;
-  ebay_title?: string | null;
-  id?: string;
   pricecharting_id?: string | null;
-}): Promise<PortfolioValuation | null> {
-  const query = buildValuationQuery(card);
+}): string {
+  return [
+    card.pricecharting_id ?? "",
+    card.year?.toString() ?? "",
+    cleanSetName(card.set_name) ?? "",
+    card.player_name,
+    card.card_number ?? "",
+    card.grade ?? "",
+  ].join("|");
+}
 
-  const cached = valuationCache.get(query);
-  if (cached && Date.now() - cached.ts < VALUATION_TTL) return cached.data;
+function hasRequestedGrade(grade: string | null | undefined): boolean {
+  const g = grade?.trim();
+  return !!g && !/raw|ungraded/i.test(g);
+}
+
+function buildEbayValuation(
+  card: CardCompCriteria,
+  allListings: SoldListing[],
+  agg: {
+    trend_7d_pct?: number | null;
+    trend_30d_pct?: number | null;
+    num_sales?: number;
+    avg_price_cents?: number;
+  } | null
+): PortfolioValuation | null {
+  const { gradeMatched, approximate } = filterSoldListingsByComp(allListings, card);
+  const graded = hasRequestedGrade(card.grade);
+  const compsForPrice = graded ? gradeMatched : approximate.length > 0 ? approximate : allListings;
+
+  if (compsForPrice.length === 0) return null;
+
+  const soldListings = compsForPrice;
+  const recentSales = soldListings
+    .slice(-15)
+    .map((s) => ({ priceCents: s.priceCents, date: s.date }));
+
+  const prices = soldListings.map((s) => s.priceCents);
+  const robustValue = computeRobustPrice(prices);
+  const aggValue = agg?.avg_price_cents ?? 0;
+  const finalValue =
+    aggValue > 0 && robustValue > 0 ? sanityCheckValue(aggValue, robustValue) : robustValue || aggValue;
+
+  if (finalValue <= 0) return null;
+
+  const compCountGradeSpecific = graded ? gradeMatched.length : approximate.length;
+  const matchLevel = computeEbayMatchLevel(
+    gradeMatched.length,
+    approximate.length,
+    graded
+  );
+
+  return {
+    currentValueCents: finalValue,
+    trend7dPct: agg?.trend_7d_pct ?? null,
+    trend30dPct: agg?.trend_30d_pct ?? null,
+    numSales: compCountGradeSpecific > 0 ? compCountGradeSpecific : (agg?.num_sales ?? soldListings.length),
+    recentSales,
+    soldListings,
+    activeListings: [],
+    matchLevel,
+    priceSource: "ebay_sold",
+    gradeTierUsed: graded ? card.grade?.trim() ?? null : "Raw",
+    compCountGradeSpecific,
+    catalogVolume: null,
+    matchLabel: buildMatchLabel(
+      matchLevel,
+      "ebay_sold",
+      graded ? card.grade?.trim() ?? null : "Raw",
+      compCountGradeSpecific,
+      null
+    ),
+    usedRawFallback: false,
+  };
+}
+
+/** eBay-only valuation for dev shadow compare — skips client cache. */
+async function fetchEbayValuationOnly(input: CardValuationInput): Promise<PortfolioValuation | null> {
+  if (USE_MOCK) return null;
+
+  const query = buildValuationQuery(input);
+  try {
+    const dbResult = await fetchValuationFromDB(input);
+    if (dbResult && dbResult.currentValueCents > 0) {
+      return dbResult;
+    }
+    return refreshValuationFromAPI(query, input);
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchPortfolioValuation(
+  card: CardValuationInput
+): Promise<PortfolioValuation | null> {
+  const input: CardValuationInput = {
+    ...card,
+    grade: resolveCardGrade({ grade: card.grade, ebay_title: card.ebay_title }),
+  };
+
+  const query = buildValuationQuery(input);
+  const cacheKey = buildValuationCacheKey(input);
+
+  const cached = valuationCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < VALUATION_TTL) {
+    logValuationCacheHit({ input, query, valuation: cached.data });
+    return cached.data;
+  }
+
+  const devCompare = isValuationDevLogEnabled() && USE_PRICECHARTING && !USE_MOCK;
+
+  if (devCompare) {
+    const [pcResult, ebayResult] = await Promise.all([
+      fetchPortfolioValuationFromPriceCharting({
+        player_name: input.player_name,
+        set_name: input.set_name,
+        year: input.year,
+        card_number: input.card_number,
+        grade: input.grade,
+        id: input.id,
+        pricecharting_id: input.pricecharting_id,
+      }),
+      fetchEbayValuationOnly(input),
+    ]);
+
+    logValuationCompare({
+      input,
+      query,
+      pricecharting: valuationToLogSnapshot(pcResult, "pricecharting-lookup"),
+      ebay: valuationToLogSnapshot(ebayResult, "ebay-sold"),
+      chosen: pcResult && pcResult.currentValueCents > 0 ? "pricecharting" : ebayResult ? "ebay_sold" : "none",
+      note:
+        pcResult && pcResult.currentValueCents > 0
+          ? "shipping PC (USE_PRICECHARTING)"
+          : ebayResult
+            ? "PC miss/zero — would fall back to eBay"
+            : "both sources empty",
+    });
+
+    if (pcResult && pcResult.currentValueCents > 0) {
+      valuationCache.set(cacheKey, { data: pcResult, ts: Date.now() });
+      return pcResult;
+    }
+    if (ebayResult && ebayResult.currentValueCents > 0) {
+      valuationCache.set(cacheKey, { data: ebayResult, ts: Date.now() });
+      return ebayResult;
+    }
+  }
 
   if (USE_PRICECHARTING) {
     const pcResult = await fetchPortfolioValuationFromPriceCharting({
-      player_name: card.player_name,
-      set_name: card.set_name,
-      year: card.year,
-      card_number: card.card_number,
-      grade: card.grade,
-      id: card.id,
-      pricecharting_id: card.pricecharting_id,
+      player_name: input.player_name,
+      set_name: input.set_name,
+      year: input.year,
+      card_number: input.card_number,
+      grade: input.grade,
+      id: input.id,
+      pricecharting_id: input.pricecharting_id,
     });
     if (pcResult && pcResult.currentValueCents > 0) {
-      valuationCache.set(query, { data: pcResult, ts: Date.now() });
+      valuationCache.set(cacheKey, { data: pcResult, ts: Date.now() });
       return pcResult;
     }
     // fall through to eBay path on null / zero
@@ -744,53 +913,60 @@ export async function fetchPortfolioValuation(card: {
       recentSales: mockSales,
       soldListings: mockListings,
       activeListings: [],
+      matchLevel: "exact",
+      priceSource: "ebay_sold",
+      gradeTierUsed: input.grade?.trim() ?? "Raw",
+      compCountGradeSpecific: mockSales.length,
+      catalogVolume: null,
+      matchLabel: "Mock comps",
+      usedRawFallback: false,
     };
-    valuationCache.set(query, { data: mockVal, ts: Date.now() });
+    valuationCache.set(cacheKey, { data: mockVal, ts: Date.now() });
     return mockVal;
   }
 
   try {
     // Try Supabase cached data first (sold_listings + price_aggregates)
-    const dbResult = await fetchValuationFromDB(card);
+    const dbResult = await fetchValuationFromDB(input);
     if (dbResult && dbResult.currentValueCents > 0) {
-      valuationCache.set(query, { data: dbResult, ts: Date.now() });
-      refreshValuationFromAPI(query, card).catch(() => {});
+      valuationCache.set(cacheKey, { data: dbResult, ts: Date.now() });
+      refreshValuationFromAPI(query, input).catch(() => {});
       return dbResult;
     }
 
-    // No cached data -- call edge function with full query
-    const apiResult = await refreshValuationFromAPI(query, card);
+    const apiResult = await refreshValuationFromAPI(query, input);
     if (apiResult && apiResult.currentValueCents > 0) {
       return apiResult;
     }
 
     // Value came back $0 -- try progressively broader searches
-    const broaderVariants = buildBroaderSearchVariants(card);
+    const broaderVariants = buildBroaderSearchVariants(input);
     for (const variant of broaderVariants) {
       const variantQuery = buildValuationQuery(variant);
+      const variantCacheKey = buildValuationCacheKey(variant);
 
       if (variantQuery === query) continue;
 
-      const variantCached = valuationCache.get(variantQuery);
+      const variantCached = valuationCache.get(variantCacheKey);
       if (variantCached && Date.now() - variantCached.ts < VALUATION_TTL && variantCached.data.currentValueCents > 0) {
-        valuationCache.set(query, { data: variantCached.data, ts: Date.now() });
+        valuationCache.set(cacheKey, { data: variantCached.data, ts: Date.now() });
         return variantCached.data;
       }
 
       const variantResult = await refreshValuationFromAPI(variantQuery, variant);
       if (variantResult && variantResult.currentValueCents > 0) {
-        valuationCache.set(query, { data: variantResult, ts: Date.now() });
+        valuationCache.set(cacheKey, { data: variantResult, ts: Date.now() });
         return variantResult;
       }
     }
 
     // Last resort: use the original eBay listing title as search query
-    if (card.ebay_title) {
-      const ebayTitleResult = await refreshValuationFromAPI(card.ebay_title, {
-        player_name: card.ebay_title,
+    if (input.ebay_title) {
+      const ebayTitleResult = await refreshValuationFromAPI(input.ebay_title, {
+        player_name: input.ebay_title,
       });
       if (ebayTitleResult && ebayTitleResult.currentValueCents > 0) {
-        valuationCache.set(query, { data: ebayTitleResult, ts: Date.now() });
+        valuationCache.set(cacheKey, { data: ebayTitleResult, ts: Date.now() });
         return ebayTitleResult;
       }
     }
@@ -993,40 +1169,13 @@ async function fetchValuationFromDB(card: {
     const { data: listings } = await listingsQuery;
     if (!listings || listings.length === 0) return null;
 
-    const setLower = card.set_name?.toLowerCase();
-    const gradeLower = card.grade?.toLowerCase();
-    let filtered = listings;
-
-    if (setLower) {
-      const bySet = filtered.filter((r: Record<string, unknown>) =>
-        (r.title as string).toLowerCase().includes(setLower)
-      );
-      if (bySet.length > 0) filtered = bySet;
-    }
-
-    if (gradeLower) {
-      const byGrade = filtered.filter((r: Record<string, unknown>) =>
-        (r.title as string).toLowerCase().includes(gradeLower)
-      );
-      if (byGrade.length > 0) filtered = byGrade;
-    }
-
-    if (filtered.length === 0) return null;
-
-    const soldListings: SoldListing[] = filtered.map((row: Record<string, unknown>) => ({
+    const soldListings: SoldListing[] = listings.map((row: Record<string, unknown>) => ({
       title: row.title as string,
       priceCents: row.sold_price_cents as number,
       date: (row.sold_date as string).split("T")[0],
       imageUrl: (row.image_url as string) ?? null,
       ebayUrl: (row.ebay_url as string) ?? "",
     }));
-
-    const recentSales = soldListings
-      .map((s) => ({ priceCents: s.priceCents, date: s.date }))
-      .slice(-15);
-
-    const prices = soldListings.map((s) => s.priceCents);
-    const robustValue = computeRobustPrice(prices);
 
     const searchKey = [card.year, card.set_name, card.player_name]
       .filter(Boolean)
@@ -1039,20 +1188,7 @@ async function fetchValuationFromDB(card: {
       .eq("search_key", searchKey)
       .maybeSingle();
 
-    const aggValue = agg?.avg_price_cents ?? 0;
-    const finalValue = aggValue > 0
-      ? sanityCheckValue(aggValue, robustValue)
-      : robustValue;
-
-    return {
-      currentValueCents: finalValue,
-      trend7dPct: agg?.trend_7d_pct ?? null,
-      trend30dPct: agg?.trend_30d_pct ?? null,
-      numSales: agg?.num_sales ?? soldListings.length,
-      recentSales,
-      soldListings,
-      activeListings: [],
-    };
+    return buildEbayValuation(card, soldListings, agg);
   } catch {
     return null;
   }
@@ -1082,14 +1218,9 @@ async function refreshValuationFromAPI(
 
   if (error || !data) return null;
 
-  const sorted = (data.soldItems ?? [])
-    .sort((a, b) => a.soldDate.localeCompare(b.soldDate));
+  const sorted = (data.soldItems ?? []).sort((a, b) => a.soldDate.localeCompare(b.soldDate));
 
-  const recentSales = sorted
-    .map((s) => ({ priceCents: s.soldPriceCents, date: s.soldDate.split("T")[0] }))
-    .slice(-15);
-
-  const soldListings: SoldListing[] = sorted.map((s) => ({
+  const allListings: SoldListing[] = sorted.map((s) => ({
     title: s.title,
     priceCents: s.soldPriceCents,
     date: s.soldDate.split("T")[0],
@@ -1097,24 +1228,11 @@ async function refreshValuationFromAPI(
     ebayUrl: s.ebayUrl,
   }));
 
-  const prices = soldListings.map((s) => s.priceCents);
-  const robustValue = computeRobustPrice(prices);
-  const aggValue = data.aggregate?.avg_price_cents ?? 0;
-  const finalValue = aggValue > 0 && robustValue > 0
-    ? sanityCheckValue(aggValue, robustValue)
-    : robustValue || aggValue;
+  const result = buildEbayValuation(card, allListings, data.aggregate ?? null);
+  if (!result) return null;
 
-  const result: PortfolioValuation = {
-    currentValueCents: finalValue,
-    trend7dPct: data.aggregate?.trend_7d_pct ?? null,
-    trend30dPct: data.aggregate?.trend_30d_pct ?? null,
-    numSales: data.aggregate?.num_sales ?? 0,
-    recentSales,
-    soldListings,
-    activeListings: [],
-  };
-
-  valuationCache.set(query, { data: result, ts: Date.now() });
+  const cacheKey = buildValuationCacheKey(card);
+  valuationCache.set(cacheKey, { data: result, ts: Date.now() });
   return result;
 }
 
@@ -1274,7 +1392,7 @@ export interface AddWatchlistCardInput {
   pricecharting_id?: string | null;
 }
 
-function buildSearchKey(
+export function buildSearchKey(
   playerName: string,
   setName?: string | null,
   year?: number | null
@@ -1288,6 +1406,27 @@ function buildSearchKey(
         .replace(/(^-|-$)/g, "")
     )
     .join("-");
+}
+
+/**
+ * Enrich card metadata from PriceCharting's canonical catalog before save.
+ * Fixes dirty OCR/eBay parser output (e.g. "TIFFANY - Mark McGwire 366").
+ */
+export async function enrichCardMetadata<T extends AddWatchlistCardInput>(input: T): Promise<T> {
+  if (input.pricecharting_id) return input;
+
+  const canonical = await lookupCanonicalCard(input);
+  if (!canonical) return input;
+
+  return {
+    ...input,
+    player_name: canonical.playerName,
+    set_name: canonical.setName || input.set_name,
+    year: canonical.year ?? input.year,
+    card_number: canonical.cardNumber ?? input.card_number,
+    sport: canonical.sport,
+    pricecharting_id: canonical.pricechartingId,
+  };
 }
 
 export async function fetchWatchlist(): Promise<WatchlistCard[]> {
@@ -1305,27 +1444,51 @@ export async function addToWatchlist(input: AddWatchlistCardInput): Promise<Watc
   const userId = userData.user?.id;
   if (!userId) throw new Error("Not signed in");
 
-  const searchKey = buildSearchKey(input.player_name, input.set_name, input.year);
+  const enriched = await enrichCardMetadata(input);
+  const grade = resolveCardGrade({
+    grade: enriched.grade,
+    ebay_title: enriched.ebay_title,
+  });
+
+  const valuation = await fetchPortfolioValuation(
+    toValuationInput({
+      player_name: enriched.player_name,
+      set_name: enriched.set_name ?? null,
+      year: enriched.year ?? null,
+      card_number: enriched.card_number ?? null,
+      grade,
+      image_url: enriched.image_url ?? null,
+      ebay_title: enriched.ebay_title ?? null,
+      pricecharting_id: enriched.pricecharting_id ?? null,
+    })
+  );
+
+  const snapshotCents =
+    valuation?.currentValueCents && valuation.currentValueCents > 0
+      ? valuation.currentValueCents
+      : (enriched.snapshot_price_cents ?? null);
+
+  const searchKey = buildSearchKey(enriched.player_name, enriched.set_name, enriched.year);
   const now = new Date().toISOString();
 
   const payload = {
     user_id: userId,
     search_key: searchKey || null,
-    sport: input.sport ?? "baseball",
-    year: input.year ?? null,
-    player_name: input.player_name,
-    set_name: input.set_name ?? null,
-    card_number: input.card_number ?? null,
-    grade: input.grade ?? null,
-    image_url: input.image_url ?? null,
-    ebay_title: input.ebay_title ?? null,
-    ebay_item_id: input.ebay_item_id ?? null,
-    ebay_url: input.ebay_url ?? null,
-    target_price_cents: input.target_price_cents ?? null,
-    notes: input.notes ?? null,
-    snapshot_price_cents: input.snapshot_price_cents ?? null,
-    snapshot_taken_at: input.snapshot_price_cents != null ? now : null,
-    pricecharting_id: input.pricecharting_id ?? null,
+    sport: enriched.sport ?? "baseball",
+    year: enriched.year ?? null,
+    player_name: enriched.player_name,
+    set_name: enriched.set_name ?? null,
+    card_number: enriched.card_number ?? null,
+    grade,
+    image_url: enriched.image_url ?? null,
+    ebay_title: enriched.ebay_title ?? null,
+    ebay_item_id: enriched.ebay_item_id ?? null,
+    ebay_url: enriched.ebay_url ?? null,
+    target_price_cents: enriched.target_price_cents ?? null,
+    notes: enriched.notes ?? null,
+    snapshot_price_cents: snapshotCents,
+    snapshot_taken_at: snapshotCents != null ? now : null,
+    pricecharting_id: enriched.pricecharting_id ?? null,
   };
 
   const { data, error } = await supabase
@@ -1360,7 +1523,16 @@ export async function updateWatchlistSnapshot(
 export interface UpdateWatchlistCardInput {
   target_price_cents?: number | null;
   notes?: string | null;
+  grade?: string | null;
 }
+
+/** Alias — prefer this name in new code. Same as `fetchPortfolioValuation`. */
+export const fetchCardValuation = fetchPortfolioValuation;
+
+export { toValuationInput, resolveCardGrade, type CardValuationInput } from "./valuation";
+
+/** @deprecated Use resolveCardGrade from `@/lib/valuation` */
+export const resolveWatchlistGrade = resolveCardGrade;
 
 export async function updateWatchlistCard(
   id: string,
@@ -1396,19 +1568,33 @@ export async function moveWatchlistToPortfolio(
   const userId = userData.user?.id;
   if (!userId) throw new Error("Not signed in");
 
-  const cardName = [card.year, card.set_name, card.player_name, card.card_number ? `#${card.card_number}` : ""]
-    .filter(Boolean)
-    .join(" ");
-
-  const { error: insertError } = await supabase.from("portfolio_cards").insert({
-    user_id: userId,
-    card_name: cardName,
+  const enriched = await enrichCardMetadata({
     player_name: card.player_name,
     set_name: card.set_name,
     year: card.year,
     card_number: card.card_number,
-    sport: card.sport,
     grade: card.grade,
+    sport: card.sport,
+    ebay_title: card.ebay_title,
+    pricecharting_id: card.pricecharting_id,
+  });
+
+  const cardName = [enriched.year, enriched.set_name, enriched.player_name, enriched.card_number ? `#${enriched.card_number}` : ""]
+    .filter(Boolean)
+    .join(" ");
+
+  const searchKey = buildSearchKey(enriched.player_name, enriched.set_name, enriched.year);
+
+  const { error: insertError } = await supabase.from("portfolio_cards").insert({
+    user_id: userId,
+    card_name: cardName,
+    search_key: searchKey || null,
+    player_name: enriched.player_name,
+    set_name: enriched.set_name,
+    year: enriched.year,
+    card_number: enriched.card_number,
+    sport: enriched.sport ?? card.sport,
+    grade: enriched.grade,
     image_url: card.image_url,
     ebay_title: card.ebay_title,
     ebay_item_id: card.ebay_item_id,
@@ -1416,6 +1602,7 @@ export async function moveWatchlistToPortfolio(
     purchase_price_cents: purchase.purchasePriceCents,
     purchase_date: purchase.purchaseDate,
     quantity: purchase.quantity ?? 1,
+    pricecharting_id: enriched.pricecharting_id ?? null,
   });
 
   if (insertError) throw new Error(insertError.message);
@@ -1433,34 +1620,22 @@ export async function moveWatchlistToPortfolio(
   }
 }
 
-export interface WatchlistValuation {
-  currentValueCents: number;
-  numSales: number;
-  recentSales: { priceCents: number; date: string }[];
-}
-
 /**
- * Lightweight valuation for a watchlist entry. Reuses the portfolio valuation
- * pipeline but returns only the fields we need for the row.
+ * Watchlist valuation — thin wrapper around the shared card valuation path.
+ * Do not add watchlist-only pricing logic here.
  */
 export async function fetchWatchlistValuation(
   card: WatchlistCard
-): Promise<WatchlistValuation | null> {
-  const valuation = await fetchPortfolioValuation({
-    player_name: card.player_name,
-    set_name: card.set_name,
-    year: card.year,
-    card_number: card.card_number,
-    grade: card.grade,
-    image_url: card.image_url,
-    ebay_title: card.ebay_title,
-  });
+): Promise<PortfolioValuation | null> {
+  const resolvedGrade = resolveCardGrade(card);
 
-  if (!valuation) return null;
+  if (!card.grade?.trim() && resolvedGrade) {
+    supabase
+      .from("watchlist_cards")
+      .update({ grade: resolvedGrade })
+      .eq("id", card.id)
+      .then(() => {});
+  }
 
-  return {
-    currentValueCents: valuation.currentValueCents,
-    numSales: valuation.numSales,
-    recentSales: valuation.recentSales,
-  };
+  return fetchPortfolioValuation(toValuationInput(card));
 }

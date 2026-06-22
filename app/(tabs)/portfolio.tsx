@@ -18,6 +18,9 @@ import { EditCardModal } from "@/components/EditCardModal";
 import { SalesModal } from "@/components/SalesModal";
 import { formatCents, formatPct, trendColor } from "@/lib/utils";
 import { fetchPortfolioValuation } from "@/lib/api";
+import { toValuationInput } from "@/lib/valuation";
+import { ValuationHeader } from "@/components/ValuationBlock";
+import { formatCompStatsLabel } from "@/lib/pricing/comp-match";
 import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
 import { router } from "expo-router";
@@ -320,24 +323,7 @@ function PortfolioCardRow({
                   marginBottom: 10,
                 }}
               >
-                <View>
-                  <Text
-                    style={{ fontSize: 10, color: palette.textSubtle, fontWeight: "700", letterSpacing: 0.3 }}
-                  >
-                    MARKET VALUE
-                  </Text>
-                  <Text
-                    style={{
-                      fontSize: 20,
-                      fontWeight: "700",
-                      color: palette.text,
-                      marginTop: 2,
-                      letterSpacing: -0.4,
-                    }}
-                  >
-                    {formatCents(valuation.currentValueCents)}
-                  </Text>
-                </View>
+                <ValuationHeader valuation={valuation} />
                 <View style={{ alignItems: "flex-end" }}>
                   <View
                     style={{
@@ -394,7 +380,7 @@ function PortfolioCardRow({
                     {formatPct(trendPct)}
                   </Text>
                   <Text style={{ fontSize: 11, color: palette.textSubtle }}>
-                    {`\u00B7 ${valuation.numSales} sales`}
+                    {`\u00B7 ${formatCompStatsLabel(valuation)}`}
                   </Text>
                 </View>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -497,17 +483,7 @@ export default function PortfolioScreen() {
       const results: Record<string, PortfolioValuation | null> = {};
       await Promise.all(
         cards.map(async (card) => {
-          results[card.id] = await fetchPortfolioValuation({
-            player_name: card.player_name,
-            set_name: card.set_name,
-            year: card.year,
-            card_number: card.card_number,
-            grade: card.grade,
-            image_url: card.image_url,
-            ebay_title: card.ebay_title,
-            id: card.id,
-            pricecharting_id: card.pricecharting_id,
-          });
+          results[card.id] = await fetchPortfolioValuation(toValuationInput(card));
         })
       );
       return results;

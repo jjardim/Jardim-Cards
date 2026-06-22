@@ -12,7 +12,7 @@ import { useToast } from "@/lib/toast-context";
 import { supabase } from "@/lib/supabase";
 import { router } from "expo-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { lookupEbayItem } from "@/lib/api";
+import { lookupEbayItem, enrichCardMetadata, buildSearchKey } from "@/lib/api";
 
 async function runOCR(uri: string): Promise<string[]> {
   try {
@@ -205,7 +205,6 @@ export default function ScanScreen() {
 
     setSaving(true);
     const priceCents = Math.round(parseFloat(purchasePrice) * 100);
-    const cardName = [year, setName, playerName, cardNumber ? `#${cardNumber}` : ""].filter(Boolean).join(" ");
 
     let permanentImageUrl: string | null = null;
     if (imageUri) {
@@ -216,14 +215,35 @@ export default function ScanScreen() {
       permanentBackImageUrl = await uploadCardImage(backImageUri, user.id);
     }
 
-    const { error } = await supabase.from("portfolio_cards").insert({
-      user_id: user.id,
-      card_name: cardName,
+    const enriched = await enrichCardMetadata({
       player_name: playerName,
       set_name: setName || null,
-      year: year ? parseInt(year) : null,
+      year: year ? parseInt(year, 10) : null,
       card_number: cardNumber || null,
+      grade: grade || null,
       sport,
+      ebay_title: ebayMeta.title || null,
+      pricecharting_id: null,
+    });
+
+    const resolvedName = enriched.player_name;
+    const resolvedSet = enriched.set_name ?? (setName || null);
+    const resolvedYear = enriched.year ?? (year ? parseInt(year, 10) : null);
+    const resolvedNumber = enriched.card_number ?? (cardNumber || null);
+    const resolvedCardName = [resolvedYear, resolvedSet, resolvedName, resolvedNumber ? `#${resolvedNumber}` : ""]
+      .filter(Boolean)
+      .join(" ");
+    const searchKey = buildSearchKey(resolvedName, resolvedSet, resolvedYear);
+
+    const { error } = await supabase.from("portfolio_cards").insert({
+      user_id: user.id,
+      card_name: resolvedCardName,
+      search_key: searchKey || null,
+      player_name: resolvedName,
+      set_name: resolvedSet,
+      year: resolvedYear,
+      card_number: resolvedNumber,
+      sport: enriched.sport ?? sport,
       grade: grade || null,
       image_url: permanentImageUrl,
       back_image_url: permanentBackImageUrl,
@@ -233,6 +253,7 @@ export default function ScanScreen() {
       purchase_price_cents: priceCents,
       purchase_date: purchaseDate,
       quantity: 1,
+      pricecharting_id: enriched.pricecharting_id ?? null,
     });
 
     setSaving(false);
@@ -242,7 +263,7 @@ export default function ScanScreen() {
       return false;
     }
 
-    const newSession = [...sessionCards, cardName];
+    const newSession = [...sessionCards, resolvedCardName];
     setSessionCards(newSession);
     queryClient.invalidateQueries({ queryKey: ["portfolio"] });
 

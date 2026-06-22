@@ -15,6 +15,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { palette, radius, shadow, getSportTheme } from "@/lib/theme";
 import { searchEbayCards, addToWatchlist } from "@/lib/api";
 import { lookupCanonicalCard } from "@/lib/pricing/pricecharting";
+import { extractGrade } from "@/lib/parsing/grade";
 import { useToast } from "@/lib/toast-context";
 import { formatCents } from "@/lib/utils";
 import type { CardSearchResult } from "@/lib/types";
@@ -90,14 +91,10 @@ export function AddToWatchlistModal({ visible, onClose }: AddToWatchlistModalPro
         year: canonical?.year ?? card.year,
         card_number: canonical?.cardNumber ?? card.cardNumber,
         sport: canonical?.sport ?? card.sport,
-        // Grade is a user-selected attribute (which slab you own), not
-        // canonical PC metadata — carry through whatever we parsed from the
-        // eBay listing title.
-        grade: card.grade,
+        grade: card.grade ?? extractGrade(card.title),
         image_url: card.imageUrl,
         ebay_title: card.title,
         ebay_item_id: card.id,
-        snapshot_price_cents: card.currentPriceCents,
         pricecharting_id: canonical?.pricechartingId ?? null,
       });
     },

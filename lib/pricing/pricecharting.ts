@@ -13,6 +13,12 @@ import { supabase } from "../supabase";
 import type { PortfolioValuation, SoldListing } from "../api";
 import type { Sport } from "../types";
 import { SPORTS } from "../types";
+import {
+  buildMatchLabel,
+  computePcMatchLevel,
+  filterSoldListingsByComp,
+  resolveGradeTierPrice,
+} from "./comp-match";
 
 export interface PriceChartingCard {
   player_name: string;
@@ -68,29 +74,6 @@ interface SoldListingRow {
   sold_date: string;
   image_url: string | null;
   ebay_url: string;
-}
-
-/**
- * Maps a card's grade string (free-form from scan/import flows) to the matching
- * PriceCharting price tier. Falls back through reasonable proxies before raw.
- */
-function pickPriceForGrade(prices: NormalizedPrices, grade: string | null | undefined): number | null {
-  if (!grade) return prices.rawCents;
-  const g = grade.trim();
-  if (g === "") return prices.rawCents;
-
-  if (/psa\s*10/i.test(g)) return prices.psa10Cents ?? prices.rawCents;
-  if (/psa\s*9(?!\.5)/i.test(g)) return prices.psa9Cents ?? prices.rawCents;
-  if (/psa\s*8/i.test(g)) return prices.psa8Cents ?? prices.rawCents;
-  if (/psa\s*7/i.test(g)) return prices.psa7Cents ?? prices.rawCents;
-  if (/bgs\s*10/i.test(g)) return prices.bgs10Cents ?? prices.psa10Cents ?? prices.rawCents;
-  if (/bgs\s*9\.?5/i.test(g)) return prices.bgs95Cents ?? prices.psa9Cents ?? prices.rawCents;
-  if (/bgs\s*9(?!\.)/i.test(g)) return prices.psa9Cents ?? prices.rawCents;
-  if (/sgc\s*10/i.test(g)) return prices.sgc10Cents ?? prices.psa10Cents ?? prices.rawCents;
-  if (/cgc\s*10/i.test(g)) return prices.cgc10Cents ?? prices.psa10Cents ?? prices.rawCents;
-  if (/raw|ungraded/i.test(g)) return prices.rawCents;
-
-  return prices.rawCents;
 }
 
 function cleanSetName(raw: string | null | undefined): string | null {
@@ -176,7 +159,8 @@ export async function fetchPortfolioValuationFromPriceCharting(
   const product = await lookupProduct(card);
   if (!product) return null;
 
-  const currentValueCents = pickPriceForGrade(product.prices, card.grade);
+  const tier = resolveGradeTierPrice(product.prices, card.grade);
+  const currentValueCents = tier.priceCents;
   if (!currentValueCents || currentValueCents <= 0) return null;
 
   if (card.id && product.id && card.pricecharting_id !== product.id) {
@@ -185,23 +169,43 @@ export async function fetchPortfolioValuationFromPriceCharting(
     });
   }
 
-  const soldListings = await fetchSoldListingsForCard(card);
+  const allSoldListings = await fetchSoldListingsForCard(card);
+  const { gradeMatched } = filterSoldListingsByComp(allSoldListings, card);
+  const soldListings = gradeMatched.length > 0 ? gradeMatched : allSoldListings;
+  const compCountGradeSpecific = gradeMatched.length;
+  const catalogVolume = product.salesVolume;
+
+  const matchLevel = computePcMatchLevel(
+    !!product.id,
+    tier,
+    compCountGradeSpecific
+  );
+
   const recentSales = soldListings
     .slice(0, 15)
     .map((s) => ({ priceCents: s.priceCents, date: s.date }));
 
   return {
     currentValueCents,
-    // PriceCharting doesn't expose period-over-period deltas. Leaving null for
-    // now; when we start persisting daily PC snapshots we can compute these
-    // from history.
     trend7dPct: null,
     trend30dPct: null,
-    numSales: product.salesVolume ?? soldListings.length,
+    numSales: compCountGradeSpecific > 0 ? compCountGradeSpecific : (catalogVolume ?? soldListings.length),
     recentSales,
     soldListings,
-    // Populated separately via fetchActiveListingsForCard (eBay).
     activeListings: [],
+    matchLevel,
+    priceSource: "pricecharting",
+    gradeTierUsed: tier.gradeTierUsed,
+    compCountGradeSpecific,
+    catalogVolume,
+    matchLabel: buildMatchLabel(
+      matchLevel,
+      "pricecharting",
+      tier.gradeTierUsed,
+      compCountGradeSpecific,
+      catalogVolume
+    ),
+    usedRawFallback: tier.usedRawFallback,
   };
 }
 

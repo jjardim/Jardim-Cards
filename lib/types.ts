@@ -109,7 +109,12 @@ export interface MarketMover {
   sport: string;
   imageUrl: string | null;
   avgPriceCents: number;
-  trend7dPct: number;
+  /**
+   * 7-day trend %, computed from `price_snapshots` history.
+   * `null` means "we don't have a 7d-ago baseline yet" — render as "\u2014",
+   * never as "0.0%". (See migration `create_price_snapshots`.)
+   */
+  trend7dPct: number | null;
   trend30dPct: number | null;
   numSales: number;
 }
@@ -137,3 +142,8 @@ export interface PriceHistoryPoint {
   date: string;
   priceCents: number;
 }
+
+/** How closely market comps match the owned card. See product-vision.mdc */
+export type CompMatchLevel = "exact" | "grade" | "approximate" | "stale";
+
+export type ValuationPriceSource = "pricecharting" | "ebay_sold" | "ebay_active";

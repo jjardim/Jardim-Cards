@@ -1,0 +1,90 @@
+---
+description: Cards Tracker — project overview, stack, and conventions
+alwaysApply: true
+---
+
+# Cards Tracker — Project Context
+
+A sports cards / TCG market tracking app. Categories: baseball, basketball, football, hockey, pokemon, formula1 (the `Sport` type is named for legacy reasons; new non-sport categories belong here too).
+
+## Stack
+
+- **Expo SDK 54** + **Expo Router 6** (file-based routing in `app/`)
+- **React Native 0.81** + **React 19** + **react-native-web** for web
+- **NativeWind 4** + Tailwind 3 are installed, but the codebase styles via **inline `style={{}}` using `lib/theme.ts`** (palette, radius, shadow, getSportTheme). Match this — do not introduce `className=` ad-hoc.
+- **TanStack Query v5** for all server state
+- **Supabase** for auth, Postgres, and **edge functions** (e.g. `trending`)
+- **expo-camera** + **expo-text-extractor** (OCR) for the Scan tab
+- **react-native-gifted-charts** for charts, custom `MiniSparkline` for inline
+- **Yarn** (Berry, see `.yarnrc.yml`) — not npm
+- Path alias: `@/*` → repo root
+
+## Routing map (`app/`)
+
+- `(auth)/login.tsx`, `(auth)/signup.tsx`
+- `(tabs)/index.tsx` — Market dashboard ("Market Pulse")
+- `(tabs)/search.tsx`, `(tabs)/scan.tsx`, `(tabs)/portfolio.tsx`, `(tabs)/watchlist.tsx`, `(tabs)/profile.tsx`
+- `card/[searchKey].tsx` — card detail
+
+## Key library files
+
+- `lib/api.ts` — all data fetching. Two feature flags at the top:
+  - `USE_MOCK` — falls back to `lib/mock-data.ts`
+  - `USE_PRICECHARTING` — portfolio valuations from PriceCharting (with eBay fallback)
+- `lib/types.ts` — `SoldListing`, `PriceAggregate`, `PortfolioCard`, `WatchlistCard`, `MarketMover`, `CardSearchResult`, `Sport`, `SPORTS`
+- `lib/theme.ts` — single source of truth for colors/spacing/shadows. Use this everywhere.
+- `lib/parsing/grade.ts` — grade extraction from listing titles (`extractGrade`, `stripGrade`)
+- `lib/pricing/comp-match.ts` — grade-tier pricing, comp filters, match levels, honest sales labels
+- `lib/valuation.ts` — **single valuation input path** (`toValuationInput`, `resolveCardGrade`); portfolio + watchlist + detail must use this
+- `components/ValuationBlock.tsx` — shared market-value header + comp footer (`ValuationHeader`, `ValuationCompFooter`)
+- `lib/card-parser.ts` — OCR text → `ParsedCardData`
+- `lib/auth-context.tsx`, `lib/toast-context.tsx`, `lib/supabase.ts`
+
+## Conventions & gotchas
+
+- **No casting** unless absolutely required; prefer narrowing or proper types.
+- **No legacy props** — match Tailwind config and current component APIs.
+- **Theme tokens, not literals** — pull from `palette`, `radius`, `shadow` in `lib/theme.ts`.
+- **Search keys** are the canonical way to dedupe a card across listings (`searchKey` on `MarketMover`, `search_key` on aggregates / portfolio / watchlist rows).
+- `lib/api.ts` swallows many errors in `try/catch` — when adding new paths, prefer surfacing errors via `toast-context` or React Query's error state.
+- Snake_case in DB rows (`avg_price_cents`), camelCase in derived view types (`avgPriceCents`). Don't mix.
+- All money is **integer cents** (`*_cents` columns and props). Format via `formatCents` in `lib/utils.ts`.
+
+## Build principles (keep us out of duplicate bugs)
+
+1. **Simpler path wins** — one function, one component, one code path. Don't fork portfolio vs watchlist logic.
+2. **Shared valuation pipeline** — any screen showing market value must call `fetchCardValuation` / `fetchPortfolioValuation(toValuationInput(card))`. Never hand-map `{ player_name, grade, ... }` in a screen file.
+3. **Grade always resolved the same way** — `resolveCardGrade({ grade, ebay_title })` before fetch; never pass raw `card.grade` alone.
+4. **Shared UI for shared data** — market value + comp badge + comp stats → `ValuationHeader` / `ValuationCompFooter`. Extend those instead of copying JSX.
+5. **Snapshots match comps** — watchlist snapshot = grade-matched comp at add time, not eBay ask price.
+
+When adding a new surface (detail, widget, alerts): wire through `lib/valuation.ts` + `ValuationBlock` first; only then add surface-specific UI.
+
+## Dev: PriceCharting vs eBay comparison logs
+
+We pay for **PriceCharting/SportsCardsPro** and also use **eBay sold** comps. While building, run both side-by-side in the console to judge accuracy.
+
+- **File:** `lib/pricing/valuation-dev-log.ts`
+- **On by default** in `__DEV__` when fetching valuations (portfolio + watchlist)
+- **Disable:** `EXPO_PUBLIC_VALUATION_DEV_LOG=false` in `.env`
+- **Output:** collapsed `[valuation] Player · PSA 10` groups with a table — PC value/tier/match vs eBay value/tier/match, spread %, which source shipped
+
+Shadow eBay fetch only runs when dev logging is enabled (extra API call — dev only). Do not enable in production builds you ship to users.
+
+## Pre-commit (per user rule)
+
+Always run before committing:
+
+```bash
+yarn tsc
+yarn lint
+```
+
+## Dev server
+
+```bash
+yarn start          # expo start (interactive)
+yarn web | ios | android
+```
+
+`.env` provides `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY`.

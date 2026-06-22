@@ -99,44 +99,44 @@ export default function DashboardScreen() {
   });
 
   const filtered = useMemo(() => {
-    let items = trending;
+    // Dedupe by searchKey defensively — DB now enforces uniqueness via
+    // (search_key, grade), but a card with multiple grades will surface
+    // multiple entries here. Keep the highest-volume row per searchKey.
+    const bySearchKey = new Map<string, MarketMover>();
+    for (const c of trending) {
+      const existing = bySearchKey.get(c.searchKey);
+      if (!existing || c.numSales > existing.numSales) bySearchKey.set(c.searchKey, c);
+    }
+    let items = Array.from(bySearchKey.values());
     if (tier.min > 0 || tier.max < Infinity) {
       items = items.filter((c) => c.avgPriceCents >= tier.min && c.avgPriceCents <= tier.max);
     }
     return items;
   }, [trending, tier]);
 
-  const gainers = useMemo(
-    () => filtered.filter((c) => c.trend7dPct > 0).sort((a, b) => b.trend7dPct - a.trend7dPct),
+  // Trend lists exclude cards with no baseline (null trend) — showing them
+  // in "Top Gainers" with "\u2014" would be confusing.
+  const withTrend = useMemo(
+    () => filtered.filter((c): c is MarketMover & { trend7dPct: number } => c.trend7dPct !== null),
     [filtered]
   );
+  const gainers = useMemo(
+    () => withTrend.filter((c) => c.trend7dPct > 0).sort((a, b) => b.trend7dPct - a.trend7dPct),
+    [withTrend]
+  );
   const losers = useMemo(
-    () => filtered.filter((c) => c.trend7dPct < 0).sort((a, b) => a.trend7dPct - b.trend7dPct),
-    [filtered]
+    () => withTrend.filter((c) => c.trend7dPct < 0).sort((a, b) => a.trend7dPct - b.trend7dPct),
+    [withTrend]
   );
   const trendList = trendTab === "gainers" ? gainers : losers;
 
-  const topGainer = useMemo(
-    () =>
-      filtered.reduce<MarketMover | null>(
-        (b, c) => (!b || c.trend7dPct > b.trend7dPct ? c : b),
-        null
-      ),
-    [filtered]
-  );
-  const topDecliner = useMemo(
-    () =>
-      filtered.reduce<MarketMover | null>(
-        (b, c) => (!b || c.trend7dPct < b.trend7dPct ? c : b),
-        null
-      ),
-    [filtered]
-  );
+  const topGainer = gainers[0] ?? null;
+  const topDecliner = losers[0] ?? null;
   const totalVolume = useMemo(() => filtered.reduce((s, c) => s + c.numSales, 0), [filtered]);
   const avgTrend = useMemo(() => {
-    if (filtered.length === 0) return null;
-    return filtered.reduce((s, c) => s + c.trend7dPct, 0) / filtered.length;
-  }, [filtered]);
+    if (withTrend.length === 0) return null;
+    return withTrend.reduce((s, c) => s + c.trend7dPct, 0) / withTrend.length;
+  }, [withTrend]);
 
   const handleSearch = () => {
     const q = searchText.trim();
@@ -189,6 +189,28 @@ export default function DashboardScreen() {
             <FontAwesome name="user" size={18} color={palette.text} />
           </TouchableOpacity>
         </View>
+
+        {/* M3 Expressive preview entry — temporary A/B link */}
+        <TouchableOpacity
+          onPress={() => router.push("/m3-home")}
+          activeOpacity={0.7}
+          style={{
+            alignSelf: "flex-start",
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 6,
+            marginTop: 12,
+            paddingHorizontal: 12,
+            paddingVertical: 6,
+            borderRadius: radius.pill,
+            backgroundColor: palette.purpleBg,
+          }}
+        >
+          <Text style={{ fontSize: 11 }}>{"\u2728"}</Text>
+          <Text style={{ fontSize: 11, fontWeight: "700", color: palette.purple, letterSpacing: 0.3 }}>
+            TRY M3 EXPRESSIVE PREVIEW
+          </Text>
+        </TouchableOpacity>
 
         {/* Search bar */}
         <View

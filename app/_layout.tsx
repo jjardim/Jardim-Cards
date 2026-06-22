@@ -57,6 +57,7 @@ function RootLayoutNav() {
                   headerBackTitle: "Back",
                 }}
               />
+              <Stack.Screen name="m3-home" options={{ headerShown: false }} />
             </Stack>
           </ThemeProvider>
         </ToastProvider>

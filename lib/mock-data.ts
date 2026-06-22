@@ -64,7 +64,7 @@ export function getTrendingCards(sport?: string, yearMin?: number, yearMax?: num
   if (sport) results = results.filter((r) => r.sport === sport);
   if (yearMin) results = results.filter((r) => (r.year ?? 0) >= yearMin);
   if (yearMax) results = results.filter((r) => (r.year ?? 9999) <= yearMax);
-  return results.sort((a, b) => Math.abs(b.trend7dPct) - Math.abs(a.trend7dPct));
+  return results.sort((a, b) => Math.abs(b.trend7dPct ?? 0) - Math.abs(a.trend7dPct ?? 0));
 }
 
 export function searchCards(query: string): CardSearchResult[] {
@@ -79,11 +79,13 @@ export function getCardBySearchKey(searchKey: string): MarketMover | undefined {
 }
 
 export function getRelatedCards(card: MarketMover): MarketMover[] {
+  const sameSign = (a: number | null, b: number | null) =>
+    a !== null && b !== null && a > 0 === b > 0;
   return MOCK_TRENDING.filter(
     (c) =>
       c.searchKey !== card.searchKey &&
       (c.sport === card.sport &&
-        (isSimilarEra(c.year, card.year) || c.trend7dPct > 0 === card.trend7dPct > 0))
+        (isSimilarEra(c.year, card.year) || sameSign(c.trend7dPct, card.trend7dPct)))
   ).slice(0, 4);
 }
 
@@ -93,14 +95,17 @@ function isSimilarEra(yearA: number | null, yearB: number | null): boolean {
 }
 
 export function getBuyPrice(card: MarketMover): { priceCents: number; label: string } {
-  const discount = card.trend7dPct > 10 ? 0.88 : card.trend7dPct > 0 ? 0.92 : 0.95;
+  const t = card.trend7dPct ?? 0;
+  const discount = t > 10 ? 0.88 : t > 0 ? 0.92 : 0.95;
   const buyAt = Math.round(card.avgPriceCents * discount);
   let label: string;
-  if (card.trend7dPct > 15) {
+  if (card.trend7dPct === null) {
+    label = "Not enough recent sales data to call a buy. Set a watchlist alert and wait.";
+  } else if (t > 15) {
     label = "Hot card \u2013 prices are inflated. If you see it at this price, grab it.";
-  } else if (card.trend7dPct > 5) {
+  } else if (t > 5) {
     label = "Trending up. This is a fair entry point before it climbs more.";
-  } else if (card.trend7dPct > -5) {
+  } else if (t > -5) {
     label = "Stable price. Good time to buy if you want this card.";
   } else {
     label = "Price is dipping \u2013 could be a buy-low opportunity if you believe in the player.";
@@ -109,15 +114,19 @@ export function getBuyPrice(card: MarketMover): { priceCents: number; label: str
 }
 
 export function getTrendReason(card: MarketMover): string {
-  if (card.trend7dPct > 15) {
-    return `${card.playerName} cards are surging. High demand with ${card.numSales} recent sales is driving prices up ${card.trend7dPct.toFixed(1)}% this week. Could be tied to a hot streak, award buzz, or prospect hype.`;
-  } else if (card.trend7dPct > 5) {
-    return `Steady climb for ${card.playerName}. With ${card.numSales} sales in the last week and a ${card.trend7dPct.toFixed(1)}% gain, collectors are showing renewed interest.`;
-  } else if (card.trend7dPct > -5) {
+  if (card.trend7dPct === null) {
+    return `Building 7-day history for ${card.playerName}. The trend pipeline needs a 7-day baseline before it can call a direction \u2014 check back tomorrow.`;
+  }
+  const t = card.trend7dPct;
+  if (t > 15) {
+    return `${card.playerName} cards are surging. High demand with ${card.numSales} recent sales is driving prices up ${t.toFixed(1)}% this week. Could be tied to a hot streak, award buzz, or prospect hype.`;
+  } else if (t > 5) {
+    return `Steady climb for ${card.playerName}. With ${card.numSales} sales in the last week and a ${t.toFixed(1)}% gain, collectors are showing renewed interest.`;
+  } else if (t > -5) {
     return `${card.playerName} cards are holding steady. The market is stable with ${card.numSales} recent transactions and minimal price movement.`;
-  } else if (card.trend7dPct > -15) {
-    return `${card.playerName} is cooling off, down ${Math.abs(card.trend7dPct).toFixed(1)}% this week. Could be a correction after a run-up, or fading interest.`;
+  } else if (t > -15) {
+    return `${card.playerName} is cooling off, down ${Math.abs(t).toFixed(1)}% this week. Could be a correction after a run-up, or fading interest.`;
   } else {
-    return `Significant drop for ${card.playerName} \u2013 down ${Math.abs(card.trend7dPct).toFixed(1)}% this week across ${card.numSales} sales. Potential sell signal, or a contrarian buy opportunity.`;
+    return `Significant drop for ${card.playerName} \u2013 down ${Math.abs(t).toFixed(1)}% this week across ${card.numSales} sales. Potential sell signal, or a contrarian buy opportunity.`;
   }
 }

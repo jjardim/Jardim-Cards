@@ -20,7 +20,10 @@ import {
   updateWatchlistCard,
   removeFromWatchlist,
   moveWatchlistToPortfolio,
+  updateWatchlistSnapshot,
 } from "@/lib/api";
+import { resolveCardGrade } from "@/lib/valuation";
+import { extractGrade } from "@/lib/parsing/grade";
 import { useToast } from "@/lib/toast-context";
 import { formatCents } from "@/lib/utils";
 import type { WatchlistCard } from "@/lib/types";
@@ -48,6 +51,7 @@ export function EditWatchlistModal({
 
   const [targetPrice, setTargetPrice] = useState("");
   const [notes, setNotes] = useState("");
+  const [grade, setGrade] = useState("");
   const [moveMode, setMoveMode] = useState(false);
   const [purchasePrice, setPurchasePrice] = useState("");
   const [purchaseDate, setPurchaseDate] = useState(todayIso());
@@ -60,6 +64,7 @@ export function EditWatchlistModal({
         : ""
     );
     setNotes(card.notes ?? "");
+    setGrade(resolveCardGrade(card) ?? "");
     setMoveMode(false);
     setPurchasePrice(
       currentMarketCents != null ? (currentMarketCents / 100).toFixed(2) : ""
@@ -73,13 +78,16 @@ export function EditWatchlistModal({
       const targetCents = targetPrice.trim()
         ? Math.round(parseFloat(targetPrice) * 100)
         : null;
+      const gradeValue = grade.trim() || extractGrade(card.ebay_title) || null;
       await updateWatchlistCard(card.id, {
         target_price_cents: targetCents && targetCents > 0 ? targetCents : null,
         notes: notes.trim() || null,
+        grade: gradeValue,
       });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["watchlist"] });
+      queryClient.invalidateQueries({ queryKey: ["watchlist-valuation"] });
       showToast("Watchlist updated", "success");
       onClose();
     },
@@ -126,6 +134,27 @@ export function EditWatchlistModal({
     },
   });
 
+  const rebaselineMutation = useMutation({
+    mutationFn: async () => {
+      if (!card || currentMarketCents == null) {
+        throw new Error("No current market value to snapshot");
+      }
+      await updateWatchlistSnapshot(card.id, currentMarketCents);
+      const gradeValue = grade.trim() || extractGrade(card.ebay_title) || null;
+      if (gradeValue && gradeValue !== card.grade) {
+        await updateWatchlistCard(card.id, { grade: gradeValue });
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["watchlist"] });
+      queryClient.invalidateQueries({ queryKey: ["watchlist-valuation"] });
+      showToast("Snapshot updated to current comp", "success");
+    },
+    onError: (err: Error) => {
+      showToast(err.message || "Failed to update snapshot", "error");
+    },
+  });
+
   const confirmRemove = () => {
     if (!card) return;
     const run = () => removeMutation.mutate();
@@ -156,7 +185,8 @@ export function EditWatchlistModal({
   const busy =
     saveMutation.isPending ||
     removeMutation.isPending ||
-    moveMutation.isPending;
+    moveMutation.isPending ||
+    rebaselineMutation.isPending;
 
   return (
     <Modal
@@ -281,6 +311,58 @@ export function EditWatchlistModal({
                 </Text>
               )}
             </View>
+          </View>
+
+          {/* Grade tier */}
+          <Text
+            style={{
+              fontSize: 11,
+              fontWeight: "800",
+              color: palette.textSubtle,
+              letterSpacing: 0.4,
+              marginTop: 22,
+              marginBottom: 8,
+            }}
+          >
+            GRADE TIER
+          </Text>
+          <View style={{ gap: 10 }}>
+            <FormField
+              label="Track this grade"
+              value={grade}
+              onChangeText={setGrade}
+              placeholder="e.g. PSA 10, BGS 9.5, Raw"
+            />
+            <Text style={{ fontSize: 11, color: palette.textSubtle }}>
+              Market value and % change use this tier — not raw comps when a slab is graded.
+            </Text>
+            {currentMarketCents != null && (
+              <TouchableOpacity
+                onPress={() => rebaselineMutation.mutate()}
+                disabled={busy}
+                style={{
+                  backgroundColor: palette.bgMuted,
+                  borderRadius: radius.md,
+                  paddingVertical: 12,
+                  paddingHorizontal: 14,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                }}
+              >
+                {rebaselineMutation.isPending ? (
+                  <ActivityIndicator size="small" color={palette.primary} />
+                ) : (
+                  <>
+                    <FontAwesome name="refresh" size={12} color={palette.primary} />
+                    <Text style={{ fontSize: 13, fontWeight: "700", color: palette.primary }}>
+                      {`Re-baseline snapshot to ${formatCents(currentMarketCents)}`}
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            )}
           </View>
 
           {/* Target price */}

@@ -1,0 +1,206 @@
+---
+description: Cards Tracker — product vision, pricing accuracy, comp matching, profit targets
+alwaysApply: true
+---
+
+# Cards Tracker — Product Vision
+
+**North star:** A stock-trading app for sports cards. Every number must be trustworthy. Portfolio goes up/down like a brokerage. Gamify wins only after accuracy is solid.
+
+Reference this when planning features, fixing bugs, or answering "what are we building?"
+
+---
+
+## Core promise
+
+> "What would **this exact card** sell for today?"
+
+Match stack (strictest → loosest):
+
+1. **PriceCharting product ID** — which exact card (set, year, #, variant e.g. Tiffany)
+2. **Grade tier** — PSA 9 price for a PSA 9 slab, never raw by default
+3. **Recent sold comps** — eBay sold listings filtered to same grade + variant
+4. **If no match** — show badge + last-known price; never silently blend wrong tiers
+
+**Data sources:** SportsCardsPro / PriceCharting (catalog + grade-tier prices) + eBay sold (individual comps). PC for headline price when `pricecharting_id` exists; eBay for comp list + trends.
+
+---
+
+## Comp match levels (show on every valuation)
+
+Every `PortfolioValuation` (and watchlist/card detail) should expose match quality:
+
+| Level | Badge | Meaning |
+|-------|-------|---------|
+| `exact` | ✅ Exact | PC product ID + correct grade tier, OR ≥3 eBay sold comps matching grade+set+#+variant (90d) |
+| `grade` | 🟡 Grade matched | Right card + grade, thin comps (1–2 sales) |
+| `approximate` | 🟠 Approximate | Same player/set but wrong/missing grade or variant (e.g. raw comps for PSA 9) |
+| `stale` | ⚪ No recent comps | Nothing sold recently at this tier |
+
+UI: badge on portfolio row + card detail. Tap → list of comps that priced it.
+
+**Label sales honestly:**
+- PC `salesVolume` → "PC catalog volume" (all grades), NOT "X sales" implying grade-specific
+- eBay → "N PSA 9 sold (90d)" when grade-filtered
+
+Extend `PortfolioValuation` with: `matchLevel`, `priceSource`, `gradeTierUsed`, `compCount`, `compCountGradeSpecific`, `matchLabel`.
+
+---
+
+## Known pricing bugs (fix before gamification)
+
+- **Grade tier leak:** PC product correct but UI showed **raw** price ($26) instead of **PSA 9** ($59.99) for Tiffany McGwire #366 (`pricecharting_id` 1924394). `pickPriceForGrade` exists — verify grade reaches it; add tests.
+- **Misleading volume:** "359 sales" = PC total catalog volume, not PSA 9 comps.
+- **Fake trends:** `-60.5% 30d` computed from mixed eBay listings when PC returns null trend — don't blend ungraded comps into graded card trends.
+- **Bad metadata on add:** player stored as `"TIFFANY - Mark McGwire 366"` instead of canonical `"Mark McGwire"` + set `"Topps Tiffany"`. Always run `lookupCanonicalCard` on portfolio/watchlist add.
+- **`price_aggregates` dupes:** Fixed 2026-05-02 (NULL grade broke unique index). `recompute-trends` deployed; daily cron still needed.
+- **Trend baseline:** `price_snapshots` table exists; needs daily cron + 7 days of data before 7d % is real.
+
+---
+
+## How we're building
+
+Principles that should survive every feature decision:
+
+1. **Accuracy before upsell** — Never paywall truth (grade-tier price, comp match badge, canonical identity). Paywall *frequency* and *power tools*, not "see your card's value."
+2. **Brokerage metaphors** — Copy, UI, and limits should feel like a trading app (quotes refresh, alerts, take-profit), not a generic collector app.
+3. **Honest data** — Badges, labels, and null states over silent wrong numbers. Upsell from trust, not FOMO on fake trends.
+4. **Ship limits before Stripe** — Implement refresh quotas, feature flags, and `user_tier` scaffolding first; wire payments when retention proves the Pro bundle.
+5. **API cost = paywall boundary** — Anything that hits PriceCharting, eBay edge functions, or heavy recompute on demand is a natural Pro candidate.
+
+---
+
+## On-demand valuation refresh
+
+Users should be able to **refresh prices on demand** (portfolio header, card detail, watchlist row). Background jobs still run for everyone; manual refresh is the upsell lever.
+
+**Why this is a good paywall (eventually):**
+- Familiar — stock apps have "refresh quotes"; collectors expect it after a big sale or grade crossover.
+- Real cost — each refresh can invoke PC lookup + eBay sold; unlimited free refresh burns margin.
+- Doesn't block core use — free tier still gets values on open (cached + daily cron); refresh is *fresher*, not *exclusive*.
+- Pairs with accuracy work — after comp match badges ship, refresh shows "Exact · PSA 9" with confidence; Pro = refresh whenever you want before listing.
+
+**Free tier (ship now, no Stripe yet):**
+- Values load on screen open (existing 30min client cache + daily `recompute-trends`).
+- **Manual refresh:** e.g. **3 refreshes / day** (portfolio-wide counts as 1) or **10 / month** — pick one and tune from usage.
+- Show remaining count in UI: "2 refreshes left today" + soft upsell copy when exhausted.
+- Server-side rate limit (`valuation_refresh_log` or similar); client passes `forceRefresh: true` to bypass `valuationCache`.
+
+**Pro tier (later):**
+- Unlimited on-demand refresh
+- Priority refresh queue (optional — if we batch cron)
+
+**Do NOT paywall:** initial portfolio load, comp match level visibility, grade-correct headline price, profit % math (once built).
+
+**Implementation sketch:**
+- `fetchPortfolioValuation(..., { forceRefresh?: boolean })` — skip `valuationCache` when true
+- React Query `refetch()` on portfolio + invalidate `["portfolio-valuations"]`
+- Log `(user_id, scope, refreshed_at)` before allowing refresh; return 429 + upgrade hint when over quota
+- Feature flag / `profiles.plan` = `'free' | 'pro'` — default `'free'`, no payment required for dev
+
+---
+
+## Monetization — Pro paywall (planned)
+
+**Philosophy:** Free = track your collection accurately. Pro = act on it faster (refresh, alert, export, scan at scale).
+
+| Feature | Free | Pro |
+|---------|------|-----|
+| Portfolio / watchlist size | 50 / 10 cards | Unlimited |
+| Valuation on load | ✅ (cached + daily cron) | ✅ |
+| **On-demand price refresh** | Limited (see above) | Unlimited |
+| Comp match badges | ✅ | ✅ |
+| Profit target + Ready to Sell | Basic (e.g. top 5 cards) | Full portfolio scan |
+| Notifications / alerts | — or 1 watchlist alert | Unlimited + daily digest |
+| Portfolio value chart | 30 days | Full history + CSV export |
+| Grade tier comparison (Raw / 9 / 10) | — | ✅ |
+| Bulk scan | — | ✅ |
+| Saved searches / deal alerts | — | ✅ |
+
+**Other strong Pro candidates:**
+- **CSV / tax export** — high willingness-to-pay among serious collectors
+- **Bulk scan mode** — direct API cost
+- **"Fresh comp" alerts** — new eBay sold matching your `search_key`
+- **Auctions ending soon** — watchlist-driven
+- **Scan credit packs** — one-time IAP if PC/eBay costs spike (alternative to subscription)
+
+**Weak paywall ideas (avoid):**
+- Hiding market value behind paywall
+- Fake stale prices on free tier to force upgrade
+- Paywalling scan-to-add entirely (kills acquisition)
+
+**Decision:** Build refresh-on-demand + quota **before** Stripe. Validates behavior and cost without payment integration.
+
+---
+
+User sets a **take-profit %** (default 20%). App scans portfolio and surfaces cards at/above target.
+
+**Settings fields** (profiles or `user_preferences`):
+- `target_profit_pct` (default 20)
+- `profit_includes_fees` (default false)
+- `estimated_sell_fee_pct` (default 16 — eBay + payment, user-tunable)
+
+**Per card math:**
+- `cost_basis` = `purchase_price_cents × quantity`
+- `market_value` = grade-matched comp (from above stack)
+- `profit_pct` = `(market − cost) / cost`
+- `target_sell_price` = `cost × (1 + target_profit_pct/100)`
+- **Net mode:** subtract fees before comparing to target
+
+**Portfolio UI — "Ready to Sell" section:**
+- 🎯 At target (≥ user's %)
+- 📈 Getting close (within ~5% of target)
+- ⏳ Hold (below target)
+
+**Notifications (later):** "McGwire Tiffany PSA 9 crossed your 20% profit target."
+
+Depends on **comp match accuracy first** — wrong market value = wrong sell signals.
+
+---
+
+## Phased build order
+
+### Phase 1 — Pricing accuracy (BLOCKER for everything else)
+1. Fix grade-tier selection + tests on `pickPriceForGrade`
+2. `CompMatchLevel` on `PortfolioValuation` + UI badges
+3. Canonical card identity on add (`lookupCanonicalCard`)
+4. Strict eBay title filtering (grade, variant, card #)
+5. Backfill portfolio + aggregate `pricecharting_id`
+6. Finish infra: daily `recompute-trends` pg_cron, honest null trends in UI
+
+### Phase 2 — Trading dashboard
+- Portfolio header: total value, today P/L, cost basis, unrealized gain
+- `portfolio_snapshots` daily chart
+- Best/worst performers; realized P/L via `sold_cards`
+- **Ready to Sell** scanner (profit target from settings)
+- **On-demand refresh** with free-tier quota + Pro unlimited (see Monetization)
+
+### Phase 3 — Gamification (only after Phase 1)
+- Daily digest push, milestone toasts, green-day streaks, confetti on meaningful gains
+- "Hot hand" badge for best weekly performer
+
+### Phase 4 — Roadmap remainder
+Notifications, smarter scan, discover/deals, card detail upgrades, social, polish, monetization — see `roadmap.mdc`.
+
+---
+
+## Product metaphors (keep consistent in copy/UI)
+
+| Stocks | Cards |
+|--------|-------|
+| Cost basis | Purchase price |
+| Market price | Grade-matched comp |
+| P/L % | (market − cost) / cost |
+| Limit sell / take-profit | Profit target in settings |
+| Price alert | Watchlist target + profit-target notification |
+| Portfolio chart | `portfolio_snapshots` value over time |
+| "Exact fill" | Comp match level `exact` |
+| Refresh quotes | On-demand valuation refresh (quota → Pro) |
+
+---
+
+## Decision log
+
+- **2026-06-22** — Product vision captured. **Accuracy before gamification.** Comp match badges required on all valuations. Profit target feature approved for Profile/Settings + "Ready to Sell" portfolio section. Reprioritized roadmap: Phase 1 pricing accuracy unblocks portfolio dashboard, profit scanner, and notifications.
+- **2026-06-22** — **On-demand refresh:** ship with free daily quota now; unlimited refresh = Pro. Paywall philosophy documented — never gate truth, gate frequency + power tools. Quota + `forceRefresh` before Stripe.
+- **2026-06-22** — **One valuation path:** `lib/valuation.ts` + `ValuationBlock` shared by portfolio/watchlist. Jordan watchlist bug = forked fetch without grade/PC id. Rule: simpler path, shared API/UI.

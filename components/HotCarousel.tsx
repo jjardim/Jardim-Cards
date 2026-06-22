@@ -13,9 +13,24 @@ interface HotCarouselProps {
 export function HotCarousel({ cards }: HotCarouselProps) {
   const router = useRouter();
 
-  const top5 = cards
+  // Dedupe defensively + rank by absolute 7d move; cards without a 7d
+  // baseline (null trend) fall back to volume so the carousel still has
+  // *something* meaningful to show during the snapshot warm-up window.
+  const bySearchKey = new Map<string, MarketMover>();
+  for (const c of cards) {
+    const existing = bySearchKey.get(c.searchKey);
+    if (!existing || c.numSales > existing.numSales) bySearchKey.set(c.searchKey, c);
+  }
+  const deduped = Array.from(bySearchKey.values());
+  const trendable = deduped.filter((c) => c.trend7dPct !== null);
+  const top5 = (trendable.length > 0 ? trendable : deduped)
     .slice()
-    .sort((a, b) => Math.abs(b.trend7dPct) - Math.abs(a.trend7dPct))
+    .sort((a, b) => {
+      if (a.trend7dPct !== null && b.trend7dPct !== null) {
+        return Math.abs(b.trend7dPct) - Math.abs(a.trend7dPct);
+      }
+      return b.numSales - a.numSales;
+    })
     .slice(0, 5);
 
   if (top5.length === 0) return null;

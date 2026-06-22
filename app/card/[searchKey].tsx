@@ -181,7 +181,15 @@ export default function CardDetailScreen() {
   }
 
   const sportTheme = getSportTheme(card.sport);
-  const chartColor = card.trend7dPct >= 0 ? palette.success : palette.danger;
+  // Treat unknown trend (null) as neutral — neither green nor red.
+  const trendDirection: "up" | "down" | "flat" =
+    card.trend7dPct === null ? "flat" : card.trend7dPct >= 0 ? "up" : "down";
+  const chartColor =
+    trendDirection === "up"
+      ? palette.success
+      : trendDirection === "down"
+        ? palette.danger
+        : palette.textSubtle;
   const minVal = Math.min(...chartData.map((d) => d.value));
   const maxVal = Math.max(...chartData.map((d) => d.value));
   const yOffset = Math.max(0, minVal - (maxVal - minVal) * 0.1);
@@ -530,7 +538,7 @@ export default function CardDetailScreen() {
               width: 160,
               height: 160,
               borderRadius: 80,
-              backgroundColor: card.trend7dPct >= 0 ? palette.success : palette.danger,
+              backgroundColor: chartColor,
               opacity: 0.18,
             }}
           />
@@ -560,7 +568,12 @@ export default function CardDetailScreen() {
             <View
               style={{
                 marginLeft: "auto",
-                backgroundColor: card.trend7dPct >= 0 ? "rgba(74,222,128,0.15)" : "rgba(251,113,133,0.15)",
+                backgroundColor:
+                  trendDirection === "up"
+                    ? "rgba(74,222,128,0.15)"
+                    : trendDirection === "down"
+                      ? "rgba(251,113,133,0.15)"
+                      : "rgba(255,255,255,0.10)",
                 paddingHorizontal: 10,
                 paddingVertical: 3,
                 borderRadius: radius.pill,
@@ -570,11 +583,20 @@ export default function CardDetailScreen() {
                 style={{
                   fontSize: 10,
                   fontWeight: "800",
-                  color: card.trend7dPct >= 0 ? "#4ade80" : "#fb7185",
+                  color:
+                    trendDirection === "up"
+                      ? "#4ade80"
+                      : trendDirection === "down"
+                        ? "#fb7185"
+                        : palette.textInverseMuted,
                   letterSpacing: 0.3,
                 }}
               >
-                {card.trend7dPct >= 0 ? "TRENDING UP" : "TRENDING DOWN"}
+                {trendDirection === "up"
+                  ? "TRENDING UP"
+                  : trendDirection === "down"
+                    ? "TRENDING DOWN"
+                    : "BUILDING HISTORY"}
               </Text>
             </View>
           </View>
@@ -587,7 +609,12 @@ export default function CardDetailScreen() {
               marginTop: 14,
             }}
           >
-            Why it&apos;s {card.trend7dPct >= 0 ? "moving up" : "cooling off"}
+            Why it&apos;s{" "}
+            {trendDirection === "up"
+              ? "moving up"
+              : trendDirection === "down"
+                ? "cooling off"
+                : "still warming up"}
           </Text>
           <Text
             style={{ fontSize: 13, color: palette.textInverseMuted, lineHeight: 20, marginTop: 6 }}
@@ -615,7 +642,12 @@ export default function CardDetailScreen() {
                   style={{
                     fontSize: 18,
                     fontWeight: "700",
-                    color: card.trend7dPct >= 0 ? "#4ade80" : "#fb7185",
+                    color:
+                      trendDirection === "up"
+                        ? "#4ade80"
+                        : trendDirection === "down"
+                          ? "#fb7185"
+                          : palette.textInverseMuted,
                     letterSpacing: -0.3,
                     marginTop: 2,
                   }}

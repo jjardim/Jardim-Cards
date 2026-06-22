@@ -13,10 +13,11 @@ import { CardImage } from "@/components/CardImage";
 import { AddToWatchlistModal } from "@/components/AddToWatchlistModal";
 import { EditWatchlistModal } from "@/components/EditWatchlistModal";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
-import { MiniSparkline } from "@/components/MiniSparkline";
 import { PLBar } from "@/components/PLBar";
 import { formatCents } from "@/lib/utils";
 import { fetchWatchlist, fetchWatchlistValuation } from "@/lib/api";
+import { resolveCardGrade } from "@/lib/valuation";
+import { ValuationHeader, ValuationCompFooter } from "@/components/ValuationBlock";
 import { useAuth } from "@/lib/auth-context";
 import { palette, radius, shadow, getSportTheme } from "@/lib/theme";
 import type { WatchlistCard } from "@/lib/types";
@@ -50,6 +51,7 @@ function WatchlistRow({
   onEdit: (card: WatchlistCard, currentMarketCents: number | null) => void;
 }) {
   const sport = getSportTheme(card.sport);
+  const displayGrade = resolveCardGrade(card);
 
   const { data: valuation, isLoading: valuationLoading } = useQuery({
     queryKey: ["watchlist-valuation", card.id],
@@ -73,6 +75,14 @@ function WatchlistRow({
     targetCents != null && currentCents != null && currentCents <= targetCents;
 
   const daysTracked = daysSince(card.created_at);
+
+  const snapshotMismatch =
+    displayGrade != null &&
+    snapshotCents != null &&
+    currentCents != null &&
+    valuation != null &&
+    !valuation.usedRawFallback &&
+    (snapshotCents > currentCents * 2.5 || snapshotCents < currentCents * 0.4);
 
   const goToDetail = useCallback(() => {
     const key = buildSearchKey(card);
@@ -174,7 +184,7 @@ function WatchlistRow({
             {card.player_name}
           </Text>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
-            {card.grade && (
+            {displayGrade ? (
               <View
                 style={{
                   backgroundColor: palette.primaryBg,
@@ -184,7 +194,20 @@ function WatchlistRow({
                 }}
               >
                 <Text style={{ fontSize: 11, color: palette.primary, fontWeight: "700" }}>
-                  {card.grade}
+                  {displayGrade}
+                </Text>
+              </View>
+            ) : (
+              <View
+                style={{
+                  backgroundColor: palette.warningBg,
+                  paddingHorizontal: 8,
+                  paddingVertical: 3,
+                  borderRadius: radius.pill,
+                }}
+              >
+                <Text style={{ fontSize: 11, color: palette.warning, fontWeight: "700" }}>
+                  Raw / ungraded
                 </Text>
               </View>
             )}
@@ -257,48 +280,30 @@ function WatchlistRow({
             <ActivityIndicator size="small" color={palette.textSubtle} />
             <Text style={{ fontSize: 11, color: palette.textMuted }}>Checking market...</Text>
           </View>
-        ) : currentCents == null ? (
+        ) : !valuation ? (
           <Text style={{ fontSize: 11, color: palette.textSubtle, fontStyle: "italic" }}>
             No market data available
           </Text>
         ) : (
           <>
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "flex-end",
-                justifyContent: "space-between",
-                marginBottom: 10,
-              }}
-            >
-              <View>
-                <Text
-                  style={{
-                    fontSize: 10,
-                    color: palette.textSubtle,
-                    fontWeight: "700",
-                    letterSpacing: 0.3,
-                  }}
-                >
-                  MARKET VALUE
-                </Text>
-                <Text
-                  style={{
-                    fontSize: 20,
-                    fontWeight: "700",
-                    color: palette.text,
-                    marginTop: 2,
-                    letterSpacing: -0.4,
-                  }}
-                >
-                  {formatCents(currentCents)}
-                </Text>
-                {snapshotCents != null && (
-                  <Text style={{ fontSize: 11, color: palette.textSubtle, marginTop: 2 }}>
-                    {`since ${formatCents(snapshotCents)} added`}
-                  </Text>
-                )}
-              </View>
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "flex-end",
+                  justifyContent: "space-between",
+                  marginBottom: 10,
+                }}
+              >
+                <ValuationHeader
+                  valuation={valuation}
+                  subtitle={
+                    snapshotCents != null
+                      ? snapshotMismatch
+                        ? `Snapshot ${formatCents(snapshotCents)} may be wrong tier — tap ··· to re-baseline`
+                        : `since ${formatCents(snapshotCents)} added`
+                      : undefined
+                  }
+                />
               {deltaCents != null ? (
                 <View style={{ alignItems: "flex-end" }}>
                   <View
@@ -348,25 +353,8 @@ function WatchlistRow({
 
             {deltaPct != null && <PLBar pct={deltaPct} />}
 
-            {valuation && valuation.recentSales.length > 1 && (
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  marginTop: 10,
-                }}
-              >
-                <Text style={{ fontSize: 11, color: palette.textSubtle }}>
-                  {`${valuation.numSales} recent sales`}
-                </Text>
-                <MiniSparkline
-                  data={valuation.recentSales.map((s) => s.priceCents)}
-                  color={deltaColor}
-                  width={60}
-                  height={20}
-                />
-              </View>
+            {valuation && (
+              <ValuationCompFooter valuation={valuation} sparklineColor={deltaColor} />
             )}
           </>
         )}

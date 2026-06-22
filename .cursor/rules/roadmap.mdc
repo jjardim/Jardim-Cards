@@ -1,0 +1,86 @@
+---
+description: Cards Tracker — prioritized roadmap of what we plan to build next
+alwaysApply: true
+---
+
+# Cards Tracker — Roadmap
+
+Living document. Update as items ship or priorities shift. **Product vision, comp matching, profit targets:** see `product-vision.mdc`.
+
+When the user asks "what next?" or "what are we working on?", reference this + product-vision.
+
+## Now (highest ROI — accuracy first)
+
+### 1. Pricing accuracy + comp match badges (Phase 1 — BLOCKER)
+Everything else depends on trustworthy numbers. Full spec in `product-vision.mdc`.
+
+- Fix grade-tier price selection (`pickPriceForGrade` — PSA 9 must not show raw)
+- Add `CompMatchLevel` to `PortfolioValuation` + badges on portfolio / watchlist / card detail
+- Canonical metadata on add via `lookupCanonicalCard`; backfill existing portfolio rows
+- Strict eBay comp filtering (grade + variant + card # in title)
+- Honest labels: PC volume vs grade-specific comp count; null trend → "—" not fake %
+- Backfill `pricecharting_id` on `price_aggregates`; daily `recompute-trends` pg_cron
+- Tests: `lib/parsing/grade.ts`, `pickPriceForGrade`, `lib/card-parser.ts`
+
+### 2. Profit target + "Ready to Sell" (Phase 2a — after Phase 1)
+Profile/Settings: user sets target profit % (default 20%, optional net-after-fees).
+
+- Settings: `target_profit_pct`, `profit_includes_fees`, `estimated_sell_fee_pct`
+- Portfolio section: cards at target / near target / hold
+- Later: push when card crosses target
+
+### 3. Portfolio trading dashboard (Phase 2b)
+- `portfolio_snapshots` daily cron + value-over-time chart
+- Header: total value, today P/L, cost basis, unrealized gain
+- Best/worst performers; formalize `sold_cards` + realized P/L
+- CSV export (web first) — **Pro**
+
+### 3b. On-demand price refresh (Phase 2c — ship before Stripe)
+- Pull-to-refresh / refresh button on portfolio + card detail
+- `fetchPortfolioValuation({ forceRefresh: true })` bypasses 30min client cache
+- Server quota: e.g. 3/day free (`valuation_refresh_log`); show "N left today"
+- Pro = unlimited (flag only until payment)
+- See `product-vision.mdc` → Monetization
+
+### 4. Notifications & alerts
+- `expo-notifications` + `notification_preferences` table
+- Watchlist target hit; portfolio ≥X% move; profit target crossed; daily digest
+- Supabase scheduled edge function for diffs
+
+## Next
+
+### 5. Smarter scanning
+- Slab label OCR for grade; front/back fusion; "Did you mean…?"; bulk scan; cert barcode
+
+### 6. Discover & deals
+- Undervalued vs comps; saved searches; auctions ending soon
+
+### 7. Card detail upgrades
+- Grade tier comparison (Raw / PSA 9 / PSA 10); PSA pop; real trend reasons
+
+### 8. Gamification (Phase 3 — after accuracy)
+- Milestone toasts, streaks, confetti on gains, daily digest copy
+
+## Later
+
+### 9. Social / community
+Public profiles, follow collectors, comments, leaderboards.
+
+### 10. Polish & infra
+Offline cache, skeleton loaders, settings (theme, currency), Sentry, tests expansion.
+
+### 11. Monetization (Pro)
+Free: accurate valuations on load, limited refresh, 50 portfolio / 10 watchlist.
+Pro: unlimited refresh, alerts, CSV, bulk scan, full chart history, grade-tier compare.
+See full matrix in `product-vision.mdc`. **Implement quotas before payment integration.**
+
+### 12. M3 Expressive UI
+Experimental preview at `/m3-home` — promote only after core product is trustworthy.
+
+---
+
+## Decision log
+
+- **2026-05-02** — Roadmap captured. Deduped `price_aggregates`, added `price_snapshots`, deployed `recompute-trends`.
+- **2026-06-22** — **Reprioritized:** pricing accuracy + comp match badges before notifications/gamification. Added profit target / Ready to Sell feature. Vision written to `product-vision.mdc`. McGwire PSA 9 case study: raw $26 vs PSA 9 ~$60 exposed grade-tier + labeling bugs.
+- **2026-06-22** — On-demand refresh approved for Phase 2c: free quota now, unlimited = Pro later. Documented paywall philosophy in `product-vision.mdc`.
