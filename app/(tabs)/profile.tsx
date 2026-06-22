@@ -13,19 +13,24 @@ import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/lib/toast-context";
 import { router } from "expo-router";
+import { useUserPreferences } from "@/lib/user-preferences-context";
+import { TARGET_PROFIT_OPTIONS } from "@/lib/user-preferences";
+import { palette, radius } from "@/lib/theme";
 
-interface EbayStatus {
-  connected: boolean;
-  ebayUsername: string | null;
-  connectedAt: string | null;
-  tokenExpired: boolean;
-}
+import {
+  type EbayConnectionStatus,
+  EBAY_REFRESH_NOTICE_DAYS,
+  EBAY_REFRESH_WARN_DAYS,
+  ebayNeedsReconnect,
+  formatEbayRefreshCountdown,
+} from "@/lib/ebay-connection";
 
 export default function ProfileScreen() {
   const { user, loading, signOut } = useAuth();
   const { showToast } = useToast();
+  const { targetProfitPct, setTargetProfitPct } = useUserPreferences();
 
-  const [ebayStatus, setEbayStatus] = useState<EbayStatus | null>(null);
+  const [ebayStatus, setEbayStatus] = useState<EbayConnectionStatus | null>(null);
   const [ebayLoading, setEbayLoading] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
@@ -44,7 +49,7 @@ export default function ProfileScreen() {
       });
 
       if (!error && data) {
-        setEbayStatus(data as EbayStatus);
+        setEbayStatus(data as EbayConnectionStatus);
       }
     } catch {
       // Silently fail
@@ -137,7 +142,16 @@ export default function ProfileScreen() {
         });
 
         if (!error) {
-          setEbayStatus({ connected: false, ebayUsername: null, connectedAt: null, tokenExpired: false });
+          setEbayStatus({
+            connected: false,
+            ebayUsername: null,
+            connectedAt: null,
+            tokenExpired: false,
+            needsReconnect: false,
+            accessTokenExpiry: null,
+            refreshTokenExpiry: null,
+            daysUntilRefreshExpiry: null,
+          });
           showToast("eBay account disconnected", "info");
         }
       } catch {
@@ -177,7 +191,7 @@ export default function ProfileScreen() {
 
       if (data.error) {
         if (data.reconnect) {
-          setEbayStatus((prev) => prev ? { ...prev, tokenExpired: true } : null);
+          await checkEbayStatus();
         }
         showToast(data.error, "error");
         return;
@@ -227,7 +241,7 @@ export default function ProfileScreen() {
     } finally {
       setImporting(false);
     }
-  }, [user, showToast]);
+  }, [user, showToast, checkEbayStatus]);
 
   if (loading) {
     return (
@@ -259,6 +273,21 @@ export default function ProfileScreen() {
     );
   }
 
+  const ebayReconnect = ebayNeedsReconnect(ebayStatus);
+  const refreshDays = ebayStatus?.daysUntilRefreshExpiry ?? null;
+  const refreshCountdown = formatEbayRefreshCountdown(refreshDays);
+  const showUrgentRefresh =
+    !!ebayStatus?.connected &&
+    !ebayReconnect &&
+    refreshDays !== null &&
+    refreshDays <= EBAY_REFRESH_WARN_DAYS;
+  const showRefreshNotice =
+    !!ebayStatus?.connected &&
+    !ebayReconnect &&
+    refreshDays !== null &&
+    refreshDays > EBAY_REFRESH_WARN_DAYS &&
+    refreshDays <= EBAY_REFRESH_NOTICE_DAYS;
+
   return (
     <ScrollView style={{ flex: 1, backgroundColor: "#fafafa" }}>
       <View style={{ padding: 16 }}>
@@ -277,6 +306,60 @@ export default function ProfileScreen() {
           </Text>
         </View>
 
+        {/* Trading settings */}
+        <Text style={{ fontSize: 18, fontWeight: "700", color: "#18181b", marginTop: 28, marginBottom: 12 }}>
+          Trading
+        </Text>
+        <View
+          style={{
+            backgroundColor: palette.surface,
+            borderRadius: radius.lg,
+            padding: 20,
+            borderWidth: 1,
+            borderColor: palette.borderSoft,
+          }}
+        >
+          <Text style={{ fontSize: 15, fontWeight: "700", color: palette.text }}>
+            Profit target
+          </Text>
+          <Text style={{ fontSize: 13, color: palette.textMuted, marginTop: 6, lineHeight: 18 }}>
+            Portfolio filters like &quot;Ready to sell&quot; and &quot;Near target&quot; use this take-profit
+            percentage vs your cost basis.
+          </Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
+            {TARGET_PROFIT_OPTIONS.map((pct) => {
+              const active = targetProfitPct === pct;
+              return (
+                <TouchableOpacity
+                  key={pct}
+                  onPress={() => setTargetProfitPct(pct)}
+                  style={{
+                    paddingHorizontal: 14,
+                    paddingVertical: 8,
+                    borderRadius: radius.pill,
+                    backgroundColor: active ? palette.heroDark : palette.bgMuted,
+                    borderWidth: 1,
+                    borderColor: active ? palette.heroDark : palette.borderSoft,
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 13,
+                      fontWeight: "700",
+                      color: active ? palette.textInverse : palette.textMuted,
+                    }}
+                  >
+                    {`${pct}%`}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <Text style={{ fontSize: 11, color: palette.textSubtle, marginTop: 12 }}>
+            {`Ready to sell = unrealized gain ≥ ${targetProfitPct}%. Near target = within 5% below that.`}
+          </Text>
+        </View>
+
         {/* eBay Connection */}
         <Text style={{ fontSize: 18, fontWeight: "700", color: "#18181b", marginTop: 28, marginBottom: 12 }}>
           Integrations
@@ -288,7 +371,7 @@ export default function ProfileScreen() {
             borderRadius: 12,
             padding: 20,
             borderWidth: 1,
-            borderColor: ebayStatus?.connected ? "#bfdbfe" : "#e4e4e7",
+            borderColor: ebayStatus?.connected && !ebayReconnect ? "#bfdbfe" : "#e4e4e7",
           }}
         >
           <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 12 }}>
@@ -297,7 +380,8 @@ export default function ProfileScreen() {
                 width: 40,
                 height: 40,
                 borderRadius: 10,
-                backgroundColor: ebayStatus?.connected ? "#eff6ff" : "#f4f4f5",
+                backgroundColor:
+                  ebayStatus?.connected && !ebayReconnect ? "#eff6ff" : ebayReconnect ? "#fef9c3" : "#f4f4f5",
                 justifyContent: "center",
                 alignItems: "center",
                 marginRight: 12,
@@ -306,13 +390,17 @@ export default function ProfileScreen() {
               <FontAwesome
                 name="shopping-cart"
                 size={18}
-                color={ebayStatus?.connected ? "#2563eb" : "#a1a1aa"}
+                color={ebayStatus?.connected && !ebayReconnect ? "#2563eb" : ebayReconnect ? "#ca8a04" : "#a1a1aa"}
               />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={{ fontSize: 16, fontWeight: "600", color: "#18181b" }}>eBay</Text>
               {ebayLoading ? (
                 <ActivityIndicator size="small" color="#a1a1aa" style={{ marginTop: 4 }} />
+              ) : ebayReconnect ? (
+                <Text style={{ fontSize: 13, color: palette.danger, marginTop: 2, fontWeight: "600" }}>
+                  Re-auth required
+                </Text>
               ) : ebayStatus?.connected ? (
                 <Text style={{ fontSize: 13, color: "#22c55e", marginTop: 2 }}>
                   Connected{ebayStatus.ebayUsername ? ` as ${ebayStatus.ebayUsername}` : ""}
@@ -323,7 +411,7 @@ export default function ProfileScreen() {
                 </Text>
               )}
             </View>
-            {ebayStatus?.connected && (
+            {ebayStatus?.connected && !ebayReconnect && (
               <View
                 style={{
                   backgroundColor: "#dcfce7",
@@ -337,60 +425,131 @@ export default function ProfileScreen() {
             )}
           </View>
 
-          {ebayStatus?.tokenExpired && (
+          {ebayReconnect && (
             <View
               style={{
                 flexDirection: "row",
                 alignItems: "center",
                 gap: 6,
-                backgroundColor: "#fef9c3",
+                backgroundColor: palette.warningBg,
                 padding: 10,
                 borderRadius: 8,
                 marginBottom: 12,
               }}
             >
-              <FontAwesome name="exclamation-triangle" size={12} color="#ca8a04" />
+              <FontAwesome name="exclamation-triangle" size={12} color={palette.warning} />
+              <Text style={{ fontSize: 12, color: "#854d0e", flex: 1, lineHeight: 17 }}>
+                eBay access expired or was revoked. Reconnect to import purchases again.
+              </Text>
+            </View>
+          )}
+
+          {showUrgentRefresh && refreshCountdown && (
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 6,
+                backgroundColor: palette.warningBg,
+                padding: 10,
+                borderRadius: 8,
+                marginBottom: 12,
+              }}
+            >
+              <FontAwesome name="clock-o" size={12} color={palette.warning} />
               <Text style={{ fontSize: 12, color: "#854d0e", flex: 1 }}>
-                Your eBay session has expired. Please reconnect.
+                {`${refreshCountdown} — tap Reconnect eBay before import stops working.`}
+              </Text>
+            </View>
+          )}
+
+          {showRefreshNotice && refreshCountdown && (
+            <View
+              style={{
+                backgroundColor: palette.bgMuted,
+                padding: 10,
+                borderRadius: 8,
+                marginBottom: 12,
+              }}
+            >
+              <Text style={{ fontSize: 12, color: palette.textMuted }}>
+                {`${refreshCountdown}. eBay requires re-consent about every 18 months.`}
               </Text>
             </View>
           )}
 
           <Text style={{ fontSize: 13, color: "#71717a", lineHeight: 18, marginBottom: 16 }}>
             {ebayStatus?.connected
-              ? "Your eBay account is linked. You can import purchases or disconnect at any time."
+              ? ebayReconnect
+                ? "Your link is saved but eBay will not accept API calls until you sign in again."
+                : "Import purchases into your portfolio. Access tokens refresh automatically every ~2 hours."
               : "Connect your eBay account to automatically import card purchases into your portfolio."}
           </Text>
 
           {ebayStatus?.connected ? (
             <View style={{ gap: 8 }}>
-              <TouchableOpacity
-                onPress={handleImportPurchases}
-                disabled={importing}
-                style={{
-                  backgroundColor: "#18181b",
-                  borderRadius: 10,
-                  paddingVertical: 14,
-                  alignItems: "center",
-                  flexDirection: "row",
-                  justifyContent: "center",
-                  gap: 8,
-                  opacity: importing ? 0.6 : 1,
-                }}
-              >
-                {importing ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <FontAwesome name="download" size={14} color="#fff" />
-                )}
-                <Text style={{ color: "#fff", fontWeight: "600", fontSize: 15 }}>
-                  {importing ? "Importing..." : "Import Purchases"}
-                </Text>
-              </TouchableOpacity>
+              {ebayReconnect ? (
+                <TouchableOpacity
+                  onPress={handleConnectEbay}
+                  disabled={connecting}
+                  style={{
+                    backgroundColor: "#2563eb",
+                    borderRadius: 10,
+                    paddingVertical: 14,
+                    alignItems: "center",
+                    flexDirection: "row",
+                    justifyContent: "center",
+                    gap: 8,
+                    opacity: connecting ? 0.6 : 1,
+                  }}
+                >
+                  {connecting ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <FontAwesome name="refresh" size={14} color="#fff" />
+                  )}
+                  <Text style={{ color: "#fff", fontWeight: "600", fontSize: 15 }}>
+                    {connecting ? "Opening eBay..." : "Reconnect eBay"}
+                  </Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  onPress={handleImportPurchases}
+                  disabled={importing}
+                  style={{
+                    backgroundColor: "#18181b",
+                    borderRadius: 10,
+                    paddingVertical: 14,
+                    alignItems: "center",
+                    flexDirection: "row",
+                    justifyContent: "center",
+                    gap: 8,
+                    opacity: importing ? 0.6 : 1,
+                  }}
+                >
+                  {importing ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <FontAwesome name="download" size={14} color="#fff" />
+                  )}
+                  <Text style={{ color: "#fff", fontWeight: "600", fontSize: 15 }}>
+                    {importing ? "Importing..." : "Import Purchases"}
+                  </Text>
+                </TouchableOpacity>
+              )}
 
               {ebayStatus.connectedAt && (
                 <Text style={{ fontSize: 11, color: "#a1a1aa", textAlign: "center" }}>
-                  Connected {new Date(ebayStatus.connectedAt).toLocaleDateString()}
+                  Linked {new Date(ebayStatus.connectedAt).toLocaleDateString()}
+                  {ebayStatus.refreshTokenExpiry && !ebayReconnect
+                    ? ` · Re-auth by ${new Date(ebayStatus.refreshTokenExpiry).toLocaleDateString()}`
+                    : ""}
+                </Text>
+              )}
+
+              {!ebayReconnect && refreshDays !== null && refreshDays > EBAY_REFRESH_NOTICE_DAYS && (
+                <Text style={{ fontSize: 11, color: palette.textSubtle, textAlign: "center" }}>
+                  {`${refreshDays} days until eBay re-auth`}
                 </Text>
               )}
 

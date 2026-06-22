@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { useColorScheme } from "react-native";
 import { AuthProvider } from "@/lib/auth-context";
 import { ToastProvider } from "@/lib/toast-context";
+import { UserPreferencesProvider } from "@/lib/user-preferences-context";
 
 export { ErrorBoundary } from "expo-router";
 
@@ -45,22 +46,24 @@ function RootLayoutNav() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <ToastProvider>
-          <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-            <Stack>
-              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-              <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-              <Stack.Screen
-                name="card/[searchKey]"
-                options={{
-                  title: "Card Details",
-                  headerBackTitle: "Back",
-                }}
-              />
-              <Stack.Screen name="m3-home" options={{ headerShown: false }} />
-            </Stack>
-          </ThemeProvider>
-        </ToastProvider>
+        <UserPreferencesProvider>
+          <ToastProvider>
+            <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+              <Stack>
+                <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+                <Stack.Screen
+                  name="card/[searchKey]"
+                  options={{
+                    title: "Card Details",
+                    headerBackTitle: "Back",
+                  }}
+                />
+                <Stack.Screen name="m3-home" options={{ headerShown: false }} />
+              </Stack>
+            </ThemeProvider>
+          </ToastProvider>
+        </UserPreferencesProvider>
       </AuthProvider>
     </QueryClientProvider>
   );

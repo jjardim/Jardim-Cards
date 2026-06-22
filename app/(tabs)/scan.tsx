@@ -5,6 +5,7 @@ import * as ImagePicker from "expo-image-picker";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { parseCardText, type ParsedCardData } from "@/lib/card-parser";
 import { FormField } from "@/components/FormField";
+import { GradePicker } from "@/components/GradePicker";
 import { CardPhotoEditor } from "@/components/CardPhotoEditor";
 import { SPORTS } from "@/lib/types";
 import { useAuth } from "@/lib/auth-context";
@@ -519,7 +520,7 @@ export default function ScanScreen() {
               </ScrollView>
             </View>
           </View>
-          <FormField label="Grade" value={grade} onChangeText={setGrade} placeholder="PSA 10, BGS 9.5, Raw..." />
+          <GradePicker value={grade} onChange={setGrade} label="Grade" />
           <View style={{ flexDirection: "row", gap: 10 }}>
             <View style={{ flex: 1 }}>
               <FormField label="Purchase Price ($) *" value={purchasePrice} onChangeText={setPurchasePrice} placeholder="285.00" keyboardType="decimal-pad" />

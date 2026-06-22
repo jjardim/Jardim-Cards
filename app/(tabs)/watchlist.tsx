@@ -17,7 +17,7 @@ import { PLBar } from "@/components/PLBar";
 import { formatCents } from "@/lib/utils";
 import { fetchWatchlist, fetchWatchlistValuation } from "@/lib/api";
 import { resolveCardGrade } from "@/lib/valuation";
-import { ValuationHeader, ValuationCompFooter } from "@/components/ValuationBlock";
+import { ValuationHeader, ValuationCompFooter, CompSaleLinks } from "@/components/ValuationBlock";
 import { useAuth } from "@/lib/auth-context";
 import { palette, radius, shadow, getSportTheme } from "@/lib/theme";
 import type { WatchlistCard } from "@/lib/types";
@@ -294,16 +294,19 @@ function WatchlistRow({
                   marginBottom: 10,
                 }}
               >
-                <ValuationHeader
-                  valuation={valuation}
-                  subtitle={
-                    snapshotCents != null
-                      ? snapshotMismatch
-                        ? `Snapshot ${formatCents(snapshotCents)} may be wrong tier — tap ··· to re-baseline`
-                        : `since ${formatCents(snapshotCents)} added`
-                      : undefined
-                  }
-                />
+                <View style={{ flex: 1, marginRight: 8 }}>
+                  <ValuationHeader
+                    valuation={valuation}
+                    subtitle={
+                      snapshotCents != null
+                        ? snapshotMismatch
+                          ? `Snapshot ${formatCents(snapshotCents)} may be wrong tier — tap ··· to re-baseline`
+                          : `since ${formatCents(snapshotCents)} added`
+                        : undefined
+                    }
+                  />
+                  <CompSaleLinks listings={valuation.soldListings} grade={card.grade} />
+                </View>
               {deltaCents != null ? (
                 <View style={{ alignItems: "flex-end" }}>
                   <View

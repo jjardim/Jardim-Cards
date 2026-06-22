@@ -55,3 +55,54 @@ export function extractGrade(text: string | null | undefined): string | null {
 export function stripGrade(text: string): string {
   return text.replace(GRADE_PATTERN, " ").replace(GEM_MINT_PATTERN, " ").replace(/\s{2,}/g, " ").trim();
 }
+
+/** Slab graders supported in the grade picker and comp matching. */
+export const GRADING_COMPANIES = ["PSA", "BGS", "CGC", "SGC"] as const;
+export type GradingCompany = (typeof GRADING_COMPANIES)[number];
+
+/** Numeric tiers offered per company in the grade picker. */
+export const GRADE_SCORES: Record<GradingCompany, readonly string[]> = {
+  PSA: ["10", "9", "8", "7", "6", "5"],
+  BGS: ["10", "9.5", "9", "8.5", "8", "7"],
+  CGC: ["10", "9.5", "9", "8.5", "8", "7"],
+  SGC: ["10", "9.5", "9", "8", "7"],
+};
+
+export interface GradeSelection {
+  kind: "raw" | "graded";
+  company?: GradingCompany;
+  score?: string;
+}
+
+function isGradingCompany(value: string): value is GradingCompany {
+  return (GRADING_COMPANIES as readonly string[]).includes(value);
+}
+
+/**
+ * Parse a stored grade string into picker state. Ungraded cards and unknown
+ * strings map to `{ kind: "raw" }`.
+ */
+export function parseGradeSelection(grade: string | null | undefined): GradeSelection {
+  const trimmed = grade?.trim() ?? "";
+  if (!trimmed || /^raw$/i.test(trimmed)) return { kind: "raw" };
+
+  const extracted = extractGrade(trimmed);
+  if (extracted) {
+    if (/^GEM MINT/i.test(extracted)) {
+      const score = extracted.replace(/^GEM MINT\s*/i, "");
+      return { kind: "graded", company: "PSA", score };
+    }
+    const [company, score] = extracted.split(" ");
+    if (company && score && isGradingCompany(company)) {
+      return { kind: "graded", company, score };
+    }
+  }
+
+  return { kind: "raw" };
+}
+
+/** Canonical grade token for API/DB — empty string means ungraded/raw. */
+export function formatGradeToken(selection: GradeSelection): string {
+  if (selection.kind === "raw" || !selection.company || !selection.score) return "";
+  return `${selection.company} ${selection.score}`;
+}

@@ -11,6 +11,13 @@ export function formatPct(pct: number | null): string {
   return `${sign}${pct.toFixed(1)}%`;
 }
 
+/** Short sold date for comp links, e.g. "Mar 8". */
+export function formatCompSaleDate(isoDate: string): string {
+  const parsed = new Date(isoDate);
+  if (Number.isNaN(parsed.getTime())) return isoDate;
+  return parsed.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
 export function trendColor(pct: number | null): "green" | "red" | "gray" {
   if (pct === null || pct === undefined) return "gray";
   if (pct > 0) return "green";

@@ -17,8 +17,11 @@ import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { TrendBadge } from "@/components/TrendBadge";
 import { CardImage } from "@/components/CardImage";
 import { formatCents, formatPct } from "@/lib/utils";
-import { getCardDetail, fetchActiveListingsForCard } from "@/lib/api";
+import { getCardDetail, fetchActiveListingsForCard, fetchCardValuation } from "@/lib/api";
 import type { SoldListing, ActiveListing } from "@/lib/api";
+import { toValuationInput } from "@/lib/valuation";
+import { ValuationHeader } from "@/components/ValuationBlock";
+import { formatCompStatsLabel } from "@/lib/pricing/comp-match";
 import { palette, radius, shadow, getSportTheme } from "@/lib/theme";
 
 const CHART_WIDTH = Dimensions.get("window").width - 64;
@@ -80,6 +83,28 @@ export default function CardDetailScreen() {
   const soldListings = detail?.soldListings ?? [];
   const buySignal = detail?.buySignal ?? null;
   const trendReason = detail?.trendReason ?? "";
+
+  const { data: valuation, isLoading: valuationLoading } = useQuery({
+    queryKey: ["card-valuation", searchKey, pricechartingId, gradeStr, playerStr],
+    queryFn: () =>
+      fetchCardValuation(
+        toValuationInput({
+          player_name: playerStr ?? card!.playerName,
+          set_name: setStr ?? card!.setName,
+          year: yearStr ? parseInt(yearStr, 10) : card!.year,
+          card_number: null,
+          grade: gradeStr ?? null,
+          image_url: card!.imageUrl,
+          ebay_title: null,
+          pricecharting_id: pricechartingId ?? null,
+        })
+      ),
+    enabled: !!card,
+    staleTime: 1000 * 60 * 15,
+  });
+
+  const headlineCents = valuation?.currentValueCents ?? card?.avgPriceCents ?? 0;
+  const trend7dPct = valuation?.trend7dPct ?? card?.trend7dPct ?? null;
 
   const [salesTab, setSalesTab] = useState<SalesTab>("sold");
   const [activeListings, setActiveListings] = useState<ActiveListing[]>([]);
@@ -272,24 +297,71 @@ export default function CardDetailScreen() {
               <Text style={{ fontSize: 13, color: palette.textMuted, marginTop: 2 }} numberOfLines={2}>
                 {card.setName} {card.year ? `(${card.year})` : ""}
               </Text>
-            </View>
-            <View>
-              <Text
-                style={{ fontSize: 10, color: palette.textSubtle, fontWeight: "700", letterSpacing: 0.4 }}
-              >
-                AVG PRICE
-              </Text>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 2 }}>
-                <Text
-                  style={{ fontSize: 26, fontWeight: "700", color: palette.text, letterSpacing: -0.6 }}
+              {gradeStr ? (
+                <View
+                  style={{
+                    alignSelf: "flex-start",
+                    marginTop: 8,
+                    backgroundColor: palette.primaryBg,
+                    paddingHorizontal: 8,
+                    paddingVertical: 3,
+                    borderRadius: radius.pill,
+                  }}
                 >
-                  {formatCents(card.avgPriceCents)}
-                </Text>
-                <TrendBadge pct={card.trend7dPct} size="md" />
-              </View>
-              <Text style={{ fontSize: 11, color: palette.textSubtle, marginTop: 2 }}>
-                {card.numSales} sales in the last 7 days
-              </Text>
+                  <Text style={{ fontSize: 11, color: palette.primary, fontWeight: "700" }}>
+                    {gradeStr}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+            <View style={{ alignItems: "flex-end", maxWidth: "55%" }}>
+              {valuationLoading ? (
+                <ActivityIndicator size="small" color={palette.textSubtle} />
+              ) : valuation ? (
+                <>
+                  <ValuationHeader valuation={valuation} />
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 8,
+                      marginTop: 6,
+                      alignSelf: "flex-end",
+                    }}
+                  >
+                    <TrendBadge pct={trend7dPct} size="md" />
+                  </View>
+                  <Text
+                    style={{
+                      fontSize: 11,
+                      color: palette.textSubtle,
+                      marginTop: 4,
+                      textAlign: "right",
+                    }}
+                  >
+                    {formatCompStatsLabel(valuation)}
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Text
+                    style={{ fontSize: 10, color: palette.textSubtle, fontWeight: "700", letterSpacing: 0.4 }}
+                  >
+                    AVG PRICE
+                  </Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 2 }}>
+                    <Text
+                      style={{ fontSize: 26, fontWeight: "700", color: palette.text, letterSpacing: -0.6 }}
+                    >
+                      {formatCents(headlineCents)}
+                    </Text>
+                    <TrendBadge pct={trend7dPct} size="md" />
+                  </View>
+                  <Text style={{ fontSize: 11, color: palette.textSubtle, marginTop: 2, textAlign: "right" }}>
+                    {card.numSales} sales in the last 7 days
+                  </Text>
+                </>
+              )}
             </View>
           </View>
         </View>
@@ -512,7 +584,7 @@ export default function CardDetailScreen() {
                 <Text
                   style={{ fontSize: 14, fontWeight: "700", color: chartColor, marginTop: 2 }}
                 >
-                  {formatCents(card.avgPriceCents)}
+                  {formatCents(headlineCents)}
                 </Text>
               </View>
             </View>

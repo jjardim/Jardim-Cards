@@ -16,7 +16,10 @@ import { SPORTS } from "../types";
 import {
   buildMatchLabel,
   computePcMatchLevel,
+  computeRecentCompAverage,
   filterSoldListingsByComp,
+  filterCompOutliers,
+  RECENT_COMP_MIN,
   resolveGradeTierPrice,
 } from "./comp-match";
 
@@ -126,6 +129,16 @@ async function cachePriceChartingId(portfolioCardId: string, pricechartingId: st
     .eq("id", portfolioCardId);
 }
 
+function mapSoldListingRows(data: SoldListingRow[]): SoldListing[] {
+  return data.map((row) => ({
+    title: row.title,
+    priceCents: row.sold_price_cents,
+    date: row.sold_date.split("T")[0],
+    imageUrl: row.image_url,
+    ebayUrl: row.ebay_url,
+  }));
+}
+
 async function fetchSoldListingsForCard(card: PriceChartingCard): Promise<SoldListing[]> {
   let query = supabase
     .from("sold_listings")
@@ -137,15 +150,25 @@ async function fetchSoldListingsForCard(card: PriceChartingCard): Promise<SoldLi
   if (card.year) query = query.eq("year", card.year);
 
   const { data } = await query.returns<SoldListingRow[]>();
-  if (!data || data.length === 0) return [];
+  if (data && data.length > 0) return mapSoldListingRows(data);
 
-  return data.map((row) => ({
-    title: row.title,
-    priceCents: row.sold_price_cents,
-    date: row.sold_date.split("T")[0],
-    imageUrl: row.image_url,
-    ebayUrl: row.ebay_url,
-  }));
+  if (!card.set_name && !card.card_number) return [];
+
+  let fallback = supabase
+    .from("sold_listings")
+    .select("title, sold_price_cents, sold_date, image_url, ebay_url")
+    .order("sold_date", { ascending: false })
+    .limit(40);
+
+  if (card.year) fallback = fallback.eq("year", card.year);
+  if (card.set_name) fallback = fallback.ilike("set_name", `%${card.set_name}%`);
+  if (card.card_number) {
+    const num = card.card_number.replace(/^#/, "").trim();
+    fallback = fallback.ilike("title", `%#${num}%`);
+  }
+
+  const { data: fallbackData } = await fallback.returns<SoldListingRow[]>();
+  return fallbackData?.length ? mapSoldListingRows(fallbackData) : [];
 }
 
 /**
@@ -160,8 +183,9 @@ export async function fetchPortfolioValuationFromPriceCharting(
   if (!product) return null;
 
   const tier = resolveGradeTierPrice(product.prices, card.grade);
-  const currentValueCents = tier.priceCents;
-  if (!currentValueCents || currentValueCents <= 0) return null;
+  const gradedRequest =
+    !!card.grade?.trim() && !/raw|ungraded/i.test(card.grade);
+  if (!tier.priceCents && !gradedRequest) return null;
 
   if (card.id && product.id && card.pricecharting_id !== product.id) {
     cachePriceChartingId(card.id, product.id).catch(() => {
@@ -171,19 +195,58 @@ export async function fetchPortfolioValuationFromPriceCharting(
 
   const allSoldListings = await fetchSoldListingsForCard(card);
   const { gradeMatched } = filterSoldListingsByComp(allSoldListings, card);
-  const soldListings = gradeMatched.length > 0 ? gradeMatched : allSoldListings;
-  const compCountGradeSpecific = gradeMatched.length;
+  const cleanedGradeMatched = filterCompOutliers(gradeMatched);
+  const soldListings = gradedRequest
+    ? cleanedGradeMatched
+    : cleanedGradeMatched.length > 0
+      ? cleanedGradeMatched
+      : filterCompOutliers(allSoldListings);
+  const compCountGradeSpecific = cleanedGradeMatched.length;
   const catalogVolume = product.salesVolume;
 
-  const matchLevel = computePcMatchLevel(
-    !!product.id,
-    tier,
-    compCountGradeSpecific
-  );
+  const catalogCents =
+    tier.priceCents && tier.priceCents > 0 && !tier.usedRawFallback
+      ? tier.priceCents
+      : null;
+  const compMin =
+    gradedRequest && !catalogCents && cleanedGradeMatched.length > 0
+      ? Math.min(RECENT_COMP_MIN, cleanedGradeMatched.length)
+      : RECENT_COMP_MIN;
 
-  const recentSales = soldListings
-    .slice(0, 15)
-    .map((s) => ({ priceCents: s.priceCents, date: s.date }));
+  const recentCompAvg =
+    gradedRequest && card.grade && cleanedGradeMatched.length > 0
+      ? computeRecentCompAverage(cleanedGradeMatched, card.grade, compMin)
+      : gradedRequest && card.grade
+        ? computeRecentCompAverage(cleanedGradeMatched, card.grade)
+        : null;
+
+  const currentValueCents = recentCompAvg?.priceCents ?? catalogCents;
+  if (!currentValueCents || currentValueCents <= 0) return null;
+
+  const priceFromComps = recentCompAvg != null;
+  const gradeTierUsed =
+    recentCompAvg && card.grade?.trim()
+      ? card.grade.trim()
+      : tier.gradeTierUsed;
+  const matchLevel = priceFromComps
+    ? recentCompAvg.compCount >= RECENT_COMP_MIN
+      ? "exact"
+      : "grade"
+    : computePcMatchLevel(!!product.id, tier, compCountGradeSpecific);
+
+  const recentSales = (recentCompAvg?.compsUsed ?? soldListings.slice(0, 15))
+    .map((s) => ({ priceCents: s.priceCents, date: s.date }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const matchLabel = priceFromComps
+    ? `${gradeTierUsed} · avg last ${recentCompAvg.compCount} sold`
+    : buildMatchLabel(
+        matchLevel,
+        "pricecharting",
+        gradeTierUsed,
+        compCountGradeSpecific,
+        catalogVolume
+      );
 
   return {
     currentValueCents,
@@ -191,20 +254,14 @@ export async function fetchPortfolioValuationFromPriceCharting(
     trend30dPct: null,
     numSales: compCountGradeSpecific > 0 ? compCountGradeSpecific : (catalogVolume ?? soldListings.length),
     recentSales,
-    soldListings,
+    soldListings: recentCompAvg?.compsUsed ?? soldListings,
     activeListings: [],
     matchLevel,
-    priceSource: "pricecharting",
-    gradeTierUsed: tier.gradeTierUsed,
-    compCountGradeSpecific,
+    priceSource: priceFromComps ? "ebay_sold" : "pricecharting",
+    gradeTierUsed,
+    compCountGradeSpecific: priceFromComps ? recentCompAvg.compCount : compCountGradeSpecific,
     catalogVolume,
-    matchLabel: buildMatchLabel(
-      matchLevel,
-      "pricecharting",
-      tier.gradeTierUsed,
-      compCountGradeSpecific,
-      catalogVolume
-    ),
+    matchLabel,
     usedRawFallback: tier.usedRawFallback,
   };
 }

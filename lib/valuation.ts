@@ -6,6 +6,11 @@
 import { extractGrade } from "./parsing/grade";
 import type { PortfolioCard, WatchlistCard } from "./types";
 
+type ValuationGradeCheck = {
+  gradeTierUsed: string | null;
+  usedRawFallback: boolean;
+};
+
 export interface CardValuationInput {
   player_name: string;
   set_name?: string | null;
@@ -39,10 +44,34 @@ export function resolveCardGrade(card: GradeHint): string | null {
   return extractGrade(card.ebay_title) ?? null;
 }
 
+export function hasRequestedGrade(grade: string | null | undefined): boolean {
+  const g = grade?.trim();
+  return !!g && !/raw|ungraded/i.test(g);
+}
+
+/** Checklist / team-set rows often OCR as "1986-1987 Checklist" — normalize for search. */
+export function normalizePlayerNameForSearch(playerName: string): string {
+  const trimmed = playerName.trim();
+  if (/checklist/i.test(trimmed)) return "Checklist";
+  return trimmed;
+}
+
+/** Reject raw-tier valuations when the owned card is graded (slab). */
+export function valuationHonorsGrade(
+  valuation: ValuationGradeCheck | null | undefined,
+  grade: string | null | undefined
+): boolean {
+  if (!valuation) return false;
+  if (!hasRequestedGrade(grade)) return true;
+  if (valuation.usedRawFallback) return false;
+  if (valuation.gradeTierUsed === "Raw") return false;
+  return true;
+}
+
 /** Map any portfolio/watchlist row → unified valuation fetch input. */
 export function toValuationInput(card: ValuationCardSource): CardValuationInput {
   return {
-    player_name: card.player_name,
+    player_name: normalizePlayerNameForSearch(card.player_name),
     set_name: card.set_name,
     year: card.year,
     card_number: card.card_number,

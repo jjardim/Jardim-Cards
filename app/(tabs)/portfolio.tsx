@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState } from "react";
+import { useRef, useCallback, useState, useMemo } from "react";
 import {
   View,
   Text,
@@ -19,7 +19,14 @@ import { SalesModal } from "@/components/SalesModal";
 import { formatCents, formatPct, trendColor } from "@/lib/utils";
 import { fetchPortfolioValuation } from "@/lib/api";
 import { toValuationInput } from "@/lib/valuation";
-import { ValuationHeader } from "@/components/ValuationBlock";
+import {
+  countPortfolioFilterMatches,
+  filterPortfolioCards,
+  type PortfolioFilter,
+} from "@/lib/portfolio-filters";
+import { useUserPreferences } from "@/lib/user-preferences-context";
+import { NEAR_TARGET_BUFFER_PCT } from "@/lib/user-preferences";
+import { ValuationHeader, CompSaleLinks, PortfolioGainHero } from "@/components/ValuationBlock";
 import { formatCompStatsLabel } from "@/lib/pricing/comp-match";
 import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
@@ -30,6 +37,55 @@ import { palette, radius, shadow, getSportTheme } from "@/lib/theme";
 import { PLBar } from "@/components/PLBar";
 
 const TREND_COLORS = { green: palette.success, red: palette.danger, gray: palette.textSubtle } as const;
+
+const PORTFOLIO_FILTERS: { id: PortfolioFilter; label: string; activeColor?: string }[] = [
+  { id: "all", label: "All" },
+  { id: "gainers", label: "Top gainers", activeColor: palette.success },
+  { id: "losers", label: "Losers", activeColor: palette.danger },
+  { id: "ready_to_sell", label: "Ready to sell", activeColor: palette.primary },
+  { id: "near_target", label: "Near target", activeColor: palette.warning },
+];
+
+function PortfolioFilterPill({
+  label,
+  count,
+  active,
+  activeColor,
+  onPress,
+}: {
+  label: string;
+  count?: number;
+  active: boolean;
+  activeColor?: string;
+  onPress: () => void;
+}) {
+  const bg = active ? activeColor ?? palette.heroDark : palette.surface;
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.7}
+      style={{
+        paddingHorizontal: 14,
+        paddingVertical: 8,
+        borderRadius: radius.pill,
+        backgroundColor: bg,
+        borderWidth: active ? 0 : 1,
+        borderColor: palette.borderSoft,
+        ...(active ? shadow.sm : {}),
+      }}
+    >
+      <Text
+        style={{
+          fontSize: 12,
+          fontWeight: active ? "700" : "600",
+          color: active ? palette.textInverse : palette.textMuted,
+        }}
+      >
+        {count != null && count > 0 ? `${label} (${count})` : label}
+      </Text>
+    </TouchableOpacity>
+  );
+}
 
 function PortfolioStat({
   label,
@@ -119,7 +175,7 @@ function PortfolioCardRow({
 
   const maxHeight = height.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 240],
+    outputRange: [0, 340],
   });
 
   const marginBottom = height.interpolate({
@@ -135,17 +191,19 @@ function PortfolioCardRow({
   const plPct = paidCents > 0 && plCents !== null ? (plCents / paidCents) * 100 : null;
   const plColor = plCents !== null ? (plCents >= 0 ? TREND_COLORS.green : TREND_COLORS.red) : TREND_COLORS.gray;
 
-  let trendPct = valuation?.trend30dPct ?? valuation?.trend7dPct ?? null;
-  if (trendPct === null && valuation && valuation.recentSales.length >= 4) {
-    const sales = valuation.recentSales;
-    const mid = Math.floor(sales.length / 2);
-    const olderAvg = sales.slice(0, mid).reduce((s, r) => s + r.priceCents, 0) / mid;
-    const newerAvg = sales.slice(mid).reduce((s, r) => s + r.priceCents, 0) / (sales.length - mid);
-    if (olderAvg > 0) {
-      trendPct = Math.round(((newerAvg - olderAvg) / olderAvg) * 1000) / 10;
-    }
-  }
-  const sparkColor = TREND_COLORS[trendColor(trendPct)];
+  /** Real market trend from aggregates only — never infer from a handful of comps. */
+  const marketTrend30dPct = valuation?.trend30dPct ?? null;
+
+  const avgComp30dCents = (() => {
+    if (!valuation?.recentSales.length) return null;
+    const cutoff = Date.now() - 30 * 86400000;
+    const inWindow = valuation.recentSales.filter((s) => new Date(s.date).getTime() >= cutoff);
+    if (inWindow.length === 0) return null;
+    return Math.round(inWindow.reduce((sum, s) => sum + s.priceCents, 0) / inWindow.length);
+  })();
+
+  const sparkColor = TREND_COLORS[trendColor(plPct)];
+  const showGainHero = plCents !== null && plCents > 0 && plPct !== null;
 
   return (
     <Animated.View
@@ -208,18 +266,20 @@ function PortfolioCardRow({
               {card.player_name}
             </Text>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
-              <View
-                style={{
-                  backgroundColor: palette.bgMuted,
-                  paddingHorizontal: 8,
-                  paddingVertical: 3,
-                  borderRadius: radius.pill,
-                }}
-              >
-                <Text style={{ fontSize: 11, color: palette.textMuted, fontWeight: "600" }}>
-                  Paid {formatCents(card.purchase_price_cents)}
-                </Text>
-              </View>
+              {!showGainHero && (
+                <View
+                  style={{
+                    backgroundColor: palette.bgMuted,
+                    paddingHorizontal: 8,
+                    paddingVertical: 3,
+                    borderRadius: radius.pill,
+                  }}
+                >
+                  <Text style={{ fontSize: 11, color: palette.textMuted, fontWeight: "600" }}>
+                    Paid {formatCents(card.purchase_price_cents)}
+                  </Text>
+                </View>
+              )}
               <View
                 style={{
                   backgroundColor: palette.bgMuted,
@@ -314,50 +374,64 @@ function PortfolioCardRow({
             </View>
           ) : valuation ? (
             <>
-              {/* Big-number row */}
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "flex-end",
-                  justifyContent: "space-between",
-                  marginBottom: 10,
-                }}
-              >
-                <ValuationHeader valuation={valuation} />
-                <View style={{ alignItems: "flex-end" }}>
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      gap: 4,
-                      backgroundColor: plCents !== null && plCents >= 0 ? palette.successBg : palette.dangerBg,
-                      paddingHorizontal: 8,
-                      paddingVertical: 3,
-                      borderRadius: radius.pill,
-                    }}
-                  >
-                    <FontAwesome
-                      name={plCents !== null && plCents >= 0 ? "arrow-up" : "arrow-down"}
-                      size={9}
-                      color={plColor}
-                    />
-                    <Text style={{ fontSize: 12, fontWeight: "700", color: plColor }}>
-                      {plCents !== null ? formatCents(Math.abs(plCents)) : "\u2014"}
-                    </Text>
-                    {plPct !== null && (
-                      <Text style={{ fontSize: 11, fontWeight: "700", color: plColor }}>
-                        ({plPct >= 0 ? "+" : ""}
-                        {plPct.toFixed(1)}%)
+              {showGainHero && currentCents !== null ? (
+                <PortfolioGainHero
+                  paidCents={paidCents}
+                  worthNowCents={currentCents}
+                  plCents={plCents}
+                  plPct={plPct}
+                  valuation={valuation}
+                  grade={card.grade}
+                />
+              ) : (
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "flex-end",
+                    justifyContent: "space-between",
+                    marginBottom: 10,
+                  }}
+                >
+                  <View style={{ flex: 1, marginRight: 8 }}>
+                    <ValuationHeader valuation={valuation} />
+                    <CompSaleLinks listings={valuation.soldListings} grade={card.grade} />
+                  </View>
+                  <View style={{ alignItems: "flex-end" }}>
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 4,
+                        backgroundColor:
+                          plCents !== null && plCents >= 0 ? palette.successBg : palette.dangerBg,
+                        paddingHorizontal: 8,
+                        paddingVertical: 3,
+                        borderRadius: radius.pill,
+                      }}
+                    >
+                      <FontAwesome
+                        name={plCents !== null && plCents >= 0 ? "arrow-up" : "arrow-down"}
+                        size={9}
+                        color={plColor}
+                      />
+                      <Text style={{ fontSize: 12, fontWeight: "700", color: plColor }}>
+                        {plCents !== null ? formatCents(Math.abs(plCents)) : "\u2014"}
                       </Text>
-                    )}
+                      {plPct !== null && (
+                        <Text style={{ fontSize: 11, fontWeight: "700", color: plColor }}>
+                          ({plPct >= 0 ? "+" : ""}
+                          {plPct.toFixed(1)}%)
+                        </Text>
+                      )}
+                    </View>
                   </View>
                 </View>
-              </View>
+              )}
 
               {/* P/L progress bar */}
               <PLBar pct={plPct} />
 
-              {/* Bottom row: 30d trend + sparkline */}
+              {/* Bottom row: your return since purchase + optional market context */}
               <View
                 style={{
                   flexDirection: "row",
@@ -366,19 +440,35 @@ function PortfolioCardRow({
                   marginTop: 10,
                 }}
               >
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <View style={{ flex: 1, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
                   <Text style={{ fontSize: 11, color: palette.textSubtle, fontWeight: "600" }}>
-                    30d
+                    Since purchase
                   </Text>
                   <Text
                     style={{
                       fontSize: 13,
                       fontWeight: "700",
-                      color: TREND_COLORS[trendColor(trendPct)],
+                      color: plColor,
                     }}
                   >
-                    {formatPct(trendPct)}
+                    {plPct !== null ? formatPct(plPct) : "\u2014"}
                   </Text>
+                  {avgComp30dCents != null && (
+                    <>
+                      <Text style={{ fontSize: 11, color: palette.textSubtle }}>{"\u00B7"}</Text>
+                      <Text style={{ fontSize: 11, color: palette.textSubtle, fontWeight: "600" }}>
+                        {`30d avg ${formatCents(avgComp30dCents)}`}
+                      </Text>
+                    </>
+                  )}
+                  {marketTrend30dPct !== null && (
+                    <>
+                      <Text style={{ fontSize: 11, color: palette.textSubtle }}>{"\u00B7"}</Text>
+                      <Text style={{ fontSize: 11, color: palette.textSubtle, fontWeight: "600" }}>
+                        {`Mkt 30d ${formatPct(marketTrend30dPct)}`}
+                      </Text>
+                    </>
+                  )}
                   <Text style={{ fontSize: 11, color: palette.textSubtle }}>
                     {`\u00B7 ${formatCompStatsLabel(valuation)}`}
                   </Text>
@@ -443,7 +533,9 @@ function PortfolioCardRow({
 
 export default function PortfolioScreen() {
   const { user, loading: authLoading } = useAuth();
+  const { targetProfitPct } = useUserPreferences();
   const queryClient = useQueryClient();
+  const [portfolioFilter, setPortfolioFilter] = useState<PortfolioFilter>("all");
   const [editingCard, setEditingCard] = useState<PortfolioCard | null>(null);
   const [salesModal, setSalesModal] = useState<{
     listings: SoldListing[];
@@ -526,6 +618,34 @@ export default function PortfolioScreen() {
       updateMutation.mutate({ id, updates });
     },
     [updateMutation]
+  );
+
+  const filteredCards = useMemo(
+    () => filterPortfolioCards(cards, valuations, portfolioFilter, targetProfitPct),
+    [cards, valuations, portfolioFilter, targetProfitPct]
+  );
+
+  const filterCounts = useMemo(() => {
+    const counts: Partial<Record<PortfolioFilter, number>> = {};
+    for (const f of PORTFOLIO_FILTERS) {
+      if (f.id === "all") continue;
+      counts[f.id] = countPortfolioFilterMatches(cards, valuations, f.id, targetProfitPct);
+    }
+    return counts;
+  }, [cards, valuations, targetProfitPct]);
+
+  const portfolioFilters = useMemo(
+    () =>
+      PORTFOLIO_FILTERS.map((f) => ({
+        ...f,
+        label:
+          f.id === "ready_to_sell"
+            ? `Ready ${targetProfitPct}%+`
+            : f.id === "near_target"
+              ? `Near ${targetProfitPct}%`
+              : f.label,
+      })),
+    [targetProfitPct]
   );
 
   if (authLoading) {
@@ -722,6 +842,38 @@ export default function PortfolioScreen() {
             Your Cards
           </Text>
 
+          {cards.length > 0 && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={{ marginBottom: 12 }}
+              contentContainerStyle={{ gap: 8, paddingRight: 4 }}
+            >
+              {portfolioFilters.map((f) => (
+                <PortfolioFilterPill
+                  key={f.id}
+                  label={f.label}
+                  count={f.id === "all" ? cards.length : filterCounts[f.id]}
+                  active={portfolioFilter === f.id}
+                  activeColor={f.activeColor}
+                  onPress={() => setPortfolioFilter(f.id)}
+                />
+              ))}
+            </ScrollView>
+          )}
+
+          {portfolioFilter !== "all" && hasValuations && (
+            <Text style={{ fontSize: 11, color: palette.textSubtle, marginBottom: 10 }}>
+              {portfolioFilter === "ready_to_sell"
+                ? `Cards at or above your ${targetProfitPct}% profit target (Profile → Trading).`
+                : portfolioFilter === "near_target"
+                  ? `Within ${NEAR_TARGET_BUFFER_PCT}% of your ${targetProfitPct}% target — not quite there yet.`
+                  : portfolioFilter === "gainers"
+                    ? "Sorted by highest return since purchase."
+                    : "Sorted by biggest losses since purchase."}
+            </Text>
+          )}
+
           {isLoading && (
             <View style={{ alignItems: "center", paddingVertical: 40 }}>
               <Text style={{ color: palette.textMuted }}>Loading portfolio...</Text>
@@ -748,7 +900,28 @@ export default function PortfolioScreen() {
             </View>
           )}
 
-          {cards.map((card) => (
+          {!isLoading && cards.length > 0 && filteredCards.length === 0 && (
+            <View
+              style={{
+                backgroundColor: palette.surface,
+                borderRadius: radius.lg,
+                padding: 28,
+                alignItems: "center",
+                ...shadow.sm,
+              }}
+            >
+              <Text style={{ fontSize: 15, fontWeight: "700", color: palette.text }}>
+                No matches
+              </Text>
+              <Text style={{ fontSize: 13, color: palette.textSubtle, marginTop: 6, textAlign: "center" }}>
+                {valuationsLoading
+                  ? "Still loading market data…"
+                  : "Try another filter or check back after comps load."}
+              </Text>
+            </View>
+          )}
+
+          {filteredCards.map((card) => (
             <PortfolioCardRow
               key={card.id}
               card={card}

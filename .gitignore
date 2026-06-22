@@ -33,6 +33,8 @@ yarn-error.*
 # local env files
 .env
 .env*.local
+!.env.example
+.deploy-probe.log
 
 # Yarn
 .yarn/
@@ -44,3 +46,6 @@ yarn-error.*
 /ios
 /android
 .vercel
+
+# Supabase CLI temp
+supabase/.temp/

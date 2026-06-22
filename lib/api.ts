@@ -12,7 +12,10 @@ import {
 import {
   buildMatchLabel,
   computeEbayMatchLevel,
+  computeRecentCompAverage,
   filterSoldListingsByComp,
+  filterCompOutliers,
+  RECENT_COMP_MIN,
   type CardCompCriteria,
 } from "./pricing/comp-match";
 import { fetchPortfolioValuationFromPriceCharting, lookupCanonicalCard } from "./pricing/pricecharting";
@@ -20,8 +23,11 @@ import { extractGrade, stripGrade } from "./parsing/grade";
 import type { CompMatchLevel, ValuationPriceSource } from "./types";
 import {
   type CardValuationInput,
+  hasRequestedGrade,
+  normalizePlayerNameForSearch,
   resolveCardGrade,
   toValuationInput,
+  valuationHonorsGrade,
 } from "./valuation";
 import {
   isValuationDevLogEnabled,
@@ -712,7 +718,7 @@ function buildValuationQuery(card: {
   return [
     card.year?.toString(),
     cleanSetName(card.set_name),
-    card.player_name,
+    normalizePlayerNameForSearch(card.player_name),
     card.card_number ? `#${card.card_number}` : null,
     card.grade,
   ].filter(Boolean).join(" ");
@@ -730,15 +736,21 @@ function buildValuationCacheKey(card: {
     card.pricecharting_id ?? "",
     card.year?.toString() ?? "",
     cleanSetName(card.set_name) ?? "",
-    card.player_name,
+    normalizePlayerNameForSearch(card.player_name),
     card.card_number ?? "",
     card.grade ?? "",
   ].join("|");
 }
 
-function hasRequestedGrade(grade: string | null | undefined): boolean {
-  const g = grade?.trim();
-  return !!g && !/raw|ungraded/i.test(g);
+function acceptValuation(
+  valuation: PortfolioValuation | null | undefined,
+  grade: string | null | undefined
+): valuation is PortfolioValuation {
+  return (
+    !!valuation &&
+    valuation.currentValueCents > 0 &&
+    valuationHonorsGrade(valuation, grade)
+  );
 }
 
 function buildEbayValuation(
@@ -753,11 +765,21 @@ function buildEbayValuation(
 ): PortfolioValuation | null {
   const { gradeMatched, approximate } = filterSoldListingsByComp(allListings, card);
   const graded = hasRequestedGrade(card.grade);
-  const compsForPrice = graded ? gradeMatched : approximate.length > 0 ? approximate : allListings;
+  const gradeComps = filterCompOutliers(gradeMatched);
+  const compsForPrice = graded ? gradeComps : approximate.length > 0 ? approximate : allListings;
 
   if (compsForPrice.length === 0) return null;
 
-  const soldListings = compsForPrice;
+  const recentCompAvg =
+    graded && card.grade && gradeComps.length > 0
+      ? computeRecentCompAverage(
+          gradeComps,
+          card.grade,
+          gradeComps.length >= RECENT_COMP_MIN ? RECENT_COMP_MIN : 1
+        )
+      : null;
+
+  const soldListings = recentCompAvg?.compsUsed ?? (graded ? gradeComps : compsForPrice);
   const recentSales = soldListings
     .slice(-15)
     .map((s) => ({ priceCents: s.priceCents, date: s.date }));
@@ -765,17 +787,27 @@ function buildEbayValuation(
   const prices = soldListings.map((s) => s.priceCents);
   const robustValue = computeRobustPrice(prices);
   const aggValue = agg?.avg_price_cents ?? 0;
+  const compValue = recentCompAvg?.priceCents ?? null;
   const finalValue =
-    aggValue > 0 && robustValue > 0 ? sanityCheckValue(aggValue, robustValue) : robustValue || aggValue;
+    compValue ??
+    (graded && gradeMatched.length === 0
+      ? 0
+      : aggValue > 0 && robustValue > 0
+        ? sanityCheckValue(aggValue, robustValue)
+        : robustValue || aggValue);
 
   if (finalValue <= 0) return null;
 
-  const compCountGradeSpecific = graded ? gradeMatched.length : approximate.length;
-  const matchLevel = computeEbayMatchLevel(
-    gradeMatched.length,
-    approximate.length,
-    graded
-  );
+  const compCountGradeSpecific = recentCompAvg
+    ? recentCompAvg.compCount
+    : graded
+      ? gradeComps.length
+      : approximate.length;
+  const matchLevel = recentCompAvg
+    ? recentCompAvg.compCount >= RECENT_COMP_MIN
+      ? "exact"
+      : "grade"
+    : computeEbayMatchLevel(gradeComps.length, approximate.length, graded);
 
   return {
     currentValueCents: finalValue,
@@ -790,13 +822,15 @@ function buildEbayValuation(
     gradeTierUsed: graded ? card.grade?.trim() ?? null : "Raw",
     compCountGradeSpecific,
     catalogVolume: null,
-    matchLabel: buildMatchLabel(
-      matchLevel,
-      "ebay_sold",
-      graded ? card.grade?.trim() ?? null : "Raw",
-      compCountGradeSpecific,
-      null
-    ),
+    matchLabel: recentCompAvg
+      ? `${card.grade?.trim()} · avg last ${recentCompAvg.compCount} sold`
+      : buildMatchLabel(
+          matchLevel,
+          "ebay_sold",
+          graded ? card.grade?.trim() ?? null : "Raw",
+          compCountGradeSpecific,
+          null
+        ),
     usedRawFallback: false,
   };
 }
@@ -829,7 +863,7 @@ export async function fetchPortfolioValuation(
   const cacheKey = buildValuationCacheKey(input);
 
   const cached = valuationCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < VALUATION_TTL) {
+  if (cached && Date.now() - cached.ts < VALUATION_TTL && acceptValuation(cached.data, input.grade)) {
     logValuationCacheHit({ input, query, valuation: cached.data });
     return cached.data;
   }
@@ -864,11 +898,11 @@ export async function fetchPortfolioValuation(
             : "both sources empty",
     });
 
-    if (pcResult && pcResult.currentValueCents > 0) {
+    if (acceptValuation(pcResult, input.grade)) {
       valuationCache.set(cacheKey, { data: pcResult, ts: Date.now() });
       return pcResult;
     }
-    if (ebayResult && ebayResult.currentValueCents > 0) {
+    if (acceptValuation(ebayResult, input.grade)) {
       valuationCache.set(cacheKey, { data: ebayResult, ts: Date.now() });
       return ebayResult;
     }
@@ -884,11 +918,11 @@ export async function fetchPortfolioValuation(
       id: input.id,
       pricecharting_id: input.pricecharting_id,
     });
-    if (pcResult && pcResult.currentValueCents > 0) {
+    if (acceptValuation(pcResult, input.grade)) {
       valuationCache.set(cacheKey, { data: pcResult, ts: Date.now() });
       return pcResult;
     }
-    // fall through to eBay path on null / zero
+    // fall through to eBay path on null / zero / raw mismatch
   }
 
   if (USE_MOCK) {
@@ -928,18 +962,18 @@ export async function fetchPortfolioValuation(
   try {
     // Try Supabase cached data first (sold_listings + price_aggregates)
     const dbResult = await fetchValuationFromDB(input);
-    if (dbResult && dbResult.currentValueCents > 0) {
+    if (acceptValuation(dbResult, input.grade)) {
       valuationCache.set(cacheKey, { data: dbResult, ts: Date.now() });
       refreshValuationFromAPI(query, input).catch(() => {});
       return dbResult;
     }
 
     const apiResult = await refreshValuationFromAPI(query, input);
-    if (apiResult && apiResult.currentValueCents > 0) {
+    if (acceptValuation(apiResult, input.grade)) {
       return apiResult;
     }
 
-    // Value came back $0 -- try progressively broader searches
+    // Value came back $0 or wrong tier — try progressively broader searches (grade preserved)
     const broaderVariants = buildBroaderSearchVariants(input);
     for (const variant of broaderVariants) {
       const variantQuery = buildValuationQuery(variant);
@@ -948,30 +982,34 @@ export async function fetchPortfolioValuation(
       if (variantQuery === query) continue;
 
       const variantCached = valuationCache.get(variantCacheKey);
-      if (variantCached && Date.now() - variantCached.ts < VALUATION_TTL && variantCached.data.currentValueCents > 0) {
+      if (
+        variantCached &&
+        Date.now() - variantCached.ts < VALUATION_TTL &&
+        acceptValuation(variantCached.data, input.grade)
+      ) {
         valuationCache.set(cacheKey, { data: variantCached.data, ts: Date.now() });
         return variantCached.data;
       }
 
       const variantResult = await refreshValuationFromAPI(variantQuery, variant);
-      if (variantResult && variantResult.currentValueCents > 0) {
+      if (acceptValuation(variantResult, input.grade)) {
         valuationCache.set(cacheKey, { data: variantResult, ts: Date.now() });
         return variantResult;
       }
     }
 
-    // Last resort: use the original eBay listing title as search query
-    if (input.ebay_title) {
+    // Last resort: eBay listing title (ungraded cards only)
+    if (input.ebay_title && !hasRequestedGrade(input.grade)) {
       const ebayTitleResult = await refreshValuationFromAPI(input.ebay_title, {
         player_name: input.ebay_title,
       });
-      if (ebayTitleResult && ebayTitleResult.currentValueCents > 0) {
+      if (acceptValuation(ebayTitleResult, input.grade)) {
         valuationCache.set(cacheKey, { data: ebayTitleResult, ts: Date.now() });
         return ebayTitleResult;
       }
     }
 
-    return apiResult;
+    return acceptValuation(apiResult, input.grade) ? apiResult : null;
   } catch {
     return null;
   }
@@ -1118,6 +1156,10 @@ function buildBroaderSearchVariants(card: {
     });
   }
 
+  if (hasRequestedGrade(card.grade)) {
+    return variants.filter((variant) => hasRequestedGrade(variant.grade));
+  }
+
   return variants;
 }
 
@@ -1159,17 +1201,41 @@ async function fetchValuationFromDB(card: {
     let listingsQuery = supabase
       .from("sold_listings")
       .select("*")
-      .ilike("player_name", `%${card.player_name}%`)
+      .ilike("player_name", `%${normalizePlayerNameForSearch(card.player_name)}%`)
       .order("sold_date", { ascending: true })
       .limit(50);
 
     if (card.year) listingsQuery = listingsQuery.eq("year", card.year);
     if (card.set_name) listingsQuery = listingsQuery.ilike("set_name", `%${card.set_name}%`);
+    if (card.card_number) {
+      const num = card.card_number.replace(/^#/, "").trim();
+      listingsQuery = listingsQuery.ilike("title", `%#${num}%`);
+    }
 
     const { data: listings } = await listingsQuery;
-    if (!listings || listings.length === 0) return null;
+    let rows = listings;
 
-    const soldListings: SoldListing[] = listings.map((row: Record<string, unknown>) => ({
+    if ((!rows || rows.length === 0) && (card.set_name || card.card_number)) {
+      let fallbackQuery = supabase
+        .from("sold_listings")
+        .select("*")
+        .order("sold_date", { ascending: true })
+        .limit(50);
+
+      if (card.year) fallbackQuery = fallbackQuery.eq("year", card.year);
+      if (card.set_name) fallbackQuery = fallbackQuery.ilike("set_name", `%${card.set_name}%`);
+      if (card.card_number) {
+        const num = card.card_number.replace(/^#/, "").trim();
+        fallbackQuery = fallbackQuery.ilike("title", `%#${num}%`);
+      }
+
+      const { data: fallbackRows } = await fallbackQuery;
+      rows = fallbackRows;
+    }
+
+    if (!rows || rows.length === 0) return null;
+
+    const soldListings: SoldListing[] = rows.map((row: Record<string, unknown>) => ({
       title: row.title as string,
       priceCents: row.sold_price_cents as number,
       date: (row.sold_date as string).split("T")[0],

@@ -15,6 +15,7 @@ import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CardImage } from "./CardImage";
 import { FormField } from "./FormField";
+import { GradePicker } from "./GradePicker";
 import { palette, radius, shadow, getSportTheme } from "@/lib/theme";
 import {
   updateWatchlistCard,
@@ -327,15 +328,12 @@ export function EditWatchlistModal({
             GRADE TIER
           </Text>
           <View style={{ gap: 10 }}>
-            <FormField
-              label="Track this grade"
+            <GradePicker
               value={grade}
-              onChangeText={setGrade}
-              placeholder="e.g. PSA 10, BGS 9.5, Raw"
+              onChange={setGrade}
+              label="Track this grade"
+              hint="Market value and % change use this tier — not raw comps when a slab is graded."
             />
-            <Text style={{ fontSize: 11, color: palette.textSubtle }}>
-              Market value and % change use this tier — not raw comps when a slab is graded.
-            </Text>
             {currentMarketCents != null && (
               <TouchableOpacity
                 onPress={() => rebaselineMutation.mutate()}

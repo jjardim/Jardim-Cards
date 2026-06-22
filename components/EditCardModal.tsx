@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { FormField } from "./FormField";
+import { GradePicker } from "./GradePicker";
 import { CardPhotoEditor } from "./CardPhotoEditor";
 import { SPORTS } from "@/lib/types";
 import type { PortfolioCard } from "@/lib/types";
@@ -273,12 +274,7 @@ export function EditCardModal({ card, visible, onClose, onSave, saving }: EditCa
                 </ScrollView>
               </View>
 
-              <FormField
-                label="Grade"
-                value={grade}
-                onChangeText={setGrade}
-                placeholder="PSA 10, BGS 9.5, Raw..."
-              />
+              <GradePicker value={grade} onChange={setGrade} label="Grade" />
 
               <View style={{ flexDirection: "row", gap: 10 }}>
                 <View style={{ flex: 1 }}>
