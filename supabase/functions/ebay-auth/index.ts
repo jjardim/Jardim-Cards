@@ -174,10 +174,7 @@ Deno.serve(async (req: Request) => {
               setup_instructions: EBAY_OAUTH_SETUP,
               ...oauthConfigStatus(),
             }),
-            {
-              status: 503,
-              headers: { ...corsHeaders, "Content-Type": "application/json" },
-            }
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
           );
         }
 

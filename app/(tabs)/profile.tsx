@@ -49,6 +49,7 @@ export default function ProfileScreen() {
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [ebayOAuthConfigured, setEbayOAuthConfigured] = useState<boolean | null>(null);
 
   const handleProfitTargetChange = useCallback(
     async (pct: number) => {
@@ -109,6 +110,21 @@ export default function ProfileScreen() {
   }, [checkEbayStatus]);
 
   useEffect(() => {
+    if (!user) {
+      setEbayOAuthConfigured(null);
+      return;
+    }
+    supabase.functions
+      .invoke("ebay-auth", { body: { action: "check_oauth_config" } })
+      .then(({ data }) => {
+        if (data && typeof data.configured === "boolean") {
+          setEbayOAuthConfigured(data.configured);
+        }
+      })
+      .catch(() => setEbayOAuthConfigured(null));
+  }, [user]);
+
+  useEffect(() => {
     if (Platform.OS !== "web") return;
 
     function handleMessage(event: MessageEvent) {
@@ -153,9 +169,6 @@ export default function ProfileScreen() {
         if (data.setup_instructions) {
           showToast(data.error, "error", 8000);
           console.log("eBay OAuth setup:\n", data.setup_instructions);
-          if (data.clientIdSet === false) {
-            console.log("EBAY_CLIENT_ID is missing in Supabase Edge Function secrets.");
-          }
         } else {
           showToast(data.error, "error");
         }
@@ -519,6 +532,22 @@ export default function ProfileScreen() {
               <FontAwesome name="exclamation-triangle" size={12} color={palette.warning} />
               <Text style={{ fontSize: 12, color: "#854d0e", flex: 1, lineHeight: 17 }}>
                 eBay access expired or was revoked. Reconnect to import purchases again.
+              </Text>
+            </View>
+          )}
+
+          {ebayOAuthConfigured === false && (
+            <View
+              style={{
+                backgroundColor: palette.dangerBg,
+                padding: 10,
+                borderRadius: 8,
+                marginBottom: 12,
+              }}
+            >
+              <Text style={{ fontSize: 12, color: palette.danger, fontWeight: "600", lineHeight: 17 }}>
+                Server setup incomplete: add EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in Supabase Edge
+                Function secrets (eBay Developer → Production App ID + Cert ID), then try again.
               </Text>
             </View>
           )}
