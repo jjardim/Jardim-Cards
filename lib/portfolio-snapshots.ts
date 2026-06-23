@@ -10,6 +10,21 @@ export function todaySnapshotDate(): string {
   return `${y}-${m}-${d}`;
 }
 
+export async function fetchLatestPortfolioSnapshot(
+  userId: string
+): Promise<PortfolioSnapshot | null> {
+  const { data, error } = await supabase
+    .from("portfolio_snapshots")
+    .select("*")
+    .eq("user_id", userId)
+    .order("snapshot_date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
 export async function fetchPortfolioSnapshots(
   userId: string,
   days = 90

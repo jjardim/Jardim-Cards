@@ -36,6 +36,7 @@ import {
   logValuationCompare,
   valuationToLogSnapshot,
 } from "./pricing/valuation-dev-log";
+import { pickWorthWatchingCards, WORTH_WATCHING_POOL_SIZE } from "./trending-utils";
 
 const USE_MOCK = false;
 
@@ -142,22 +143,58 @@ async function fetchTrendingFromDB(
     const { data, error } = await query;
     if (error || !data?.length) return [];
 
-    return data.map((row: Record<string, unknown>) => ({
-      searchKey: row.search_key as string,
-      playerName: row.player_name as string,
-      setName: row.set_name as string | null,
-      year: row.year as number | null,
-      sport: row.sport as string,
-      imageUrl: (row.image_url as string) ?? null,
-      avgPriceCents: row.avg_price_cents as number,
-      // Preserve null when no 7d baseline exists. UI renders "\u2014" for null
-      // and excludes nulls from gainer/loser lists. Coercing to 0 was lying.
-      trend7dPct: (row.trend_7d_pct as number | null) ?? null,
-      trend30dPct: (row.trend_30d_pct as number | null) ?? null,
-      numSales: row.num_sales as number,
-    }));
+    return data.map(mapAggregateRow);
   } catch {
     return [];
+  }
+}
+
+function mapAggregateRow(row: Record<string, unknown>): MarketMover {
+  return {
+    searchKey: row.search_key as string,
+    playerName: row.player_name as string,
+    setName: row.set_name as string | null,
+    year: row.year as number | null,
+    sport: row.sport as string,
+    imageUrl: (row.image_url as string) ?? null,
+    avgPriceCents: row.avg_price_cents as number,
+    trend7dPct: (row.trend_7d_pct as number | null) ?? null,
+    trend30dPct: (row.trend_30d_pct as number | null) ?? null,
+    numSales: row.num_sales as number,
+    grade: ((row.grade as string | null) ?? "").trim() || null,
+  };
+}
+
+/** Raw market movers pool — filter owned/tracked cards client-side before display. */
+export async function fetchMarketMovers(
+  yearMin?: number,
+  yearMax?: number
+): Promise<MarketMover[]> {
+  if (USE_MOCK) {
+    return getMockTrending(undefined, yearMin, yearMax);
+  }
+
+  try {
+    let query = supabase
+      .from("price_aggregates")
+      .select("*")
+      .not("trend_7d_pct", "is", null)
+      .gt("trend_7d_pct", 0)
+      .gte("num_sales", 3)
+      .order("trend_7d_pct", { ascending: false })
+      .limit(WORTH_WATCHING_POOL_SIZE);
+
+    if (yearMin) query = query.gte("year", yearMin);
+    if (yearMax) query = query.lte("year", yearMax);
+
+    const { data, error } = await query;
+    if (error || !data?.length) {
+      return await fetchTrending(undefined, yearMin, yearMax);
+    }
+
+    return data.map(mapAggregateRow);
+  } catch {
+    return getMockTrending(undefined, yearMin, yearMax);
   }
 }
 
@@ -344,6 +381,7 @@ export async function getCardDetail(
             trend7dPct: null,
             trend30dPct: null,
             numSales: 0,
+            grade: hints?.grade ?? null,
           } as MarketMover,
           priceHistory: [],
           relatedCards: [],
@@ -388,6 +426,7 @@ export async function getCardDetail(
         trend7dPct: aggData.trend_7d_pct ?? null,
         trend30dPct: aggData.trend_30d_pct ?? null,
         numSales: pcValuation?.numSales ?? aggData.num_sales,
+        grade: (hints?.grade ?? aggData.grade ?? "").trim() || null,
       }
     : mockCard!;
 
@@ -438,6 +477,7 @@ export async function getCardDetail(
         trend7dPct: (row.trend_7d_pct as number | null) ?? null,
         trend30dPct: (row.trend_30d_pct as number | null) ?? null,
         numSales: row.num_sales as number,
+        grade: ((row.grade as string | null) ?? "").trim() || null,
       }))
     : getMockRelated(card);
 
@@ -471,6 +511,7 @@ async function buildDetailFromSoldRows(
     trend7dPct: null,
     trend30dPct: null,
     numSales: soldRows.length,
+    grade: hints?.grade ?? extractGrade((first.title as string) ?? "") ?? null,
   };
 
   const sorted = soldRows
@@ -510,6 +551,7 @@ async function buildDetailFromSoldRows(
         trend7dPct: (row.trend_7d_pct as number | null) ?? null,
         trend30dPct: (row.trend_30d_pct as number | null) ?? null,
         numSales: row.num_sales as number,
+        grade: ((row.grade as string | null) ?? "").trim() || null,
       }))
     : [];
 
@@ -550,6 +592,7 @@ async function buildDetailFromPriceCharting(
     trend7dPct: pc.trend7dPct,
     trend30dPct: pc.trend30dPct,
     numSales: pc.numSales,
+    grade: hints.grade ?? pc.gradeTierUsed,
   };
 
   const priceHistory = pc.soldListings
@@ -577,6 +620,7 @@ async function buildDetailFromPriceCharting(
         trend7dPct: (row.trend_7d_pct as number | null) ?? null,
         trend30dPct: (row.trend_30d_pct as number | null) ?? null,
         numSales: row.num_sales as number,
+        grade: ((row.grade as string | null) ?? "").trim() || null,
       }))
     : [];
 

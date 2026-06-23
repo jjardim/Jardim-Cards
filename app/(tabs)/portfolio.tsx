@@ -20,6 +20,8 @@ import { SalesModal } from "@/components/SalesModal";
 import { formatCents, formatPct, trendColor } from "@/lib/utils";
 import { fetchPortfolioValuation, clearValuationCache } from "@/lib/api";
 import { toValuationInput } from "@/lib/valuation";
+import { usePortfolioValuations } from "@/lib/use-portfolio-valuations";
+import { persistValuations } from "@/lib/valuation-persist";
 import {
   countPortfolioFilterMatches,
   filterPortfolioCards,
@@ -38,6 +40,7 @@ import { palette, radius, shadow, getSportTheme } from "@/lib/theme";
 import { PLBar } from "@/components/PLBar";
 import { PortfolioValueChart } from "@/components/PortfolioValueChart";
 import { ValuationRefreshButton } from "@/components/ValuationRefreshButton";
+import { RefreshPaywallModal } from "@/components/RefreshPaywallModal";
 import {
   fetchPortfolioSnapshots,
   upsertPortfolioSnapshot,
@@ -128,12 +131,53 @@ function PortfolioStat({
   );
 }
 
+function ValuationUpdatingBlock() {
+  return (
+    <View>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 12 }}>
+        <ActivityIndicator size="small" color={palette.primary} />
+        <Text style={{ fontSize: 11, color: palette.textMuted, fontWeight: "600" }}>
+          Pulling latest comps...
+        </Text>
+      </View>
+      <View style={{ gap: 8 }}>
+        <View
+          style={{
+            height: 16,
+            width: "42%",
+            backgroundColor: palette.bgMuted,
+            borderRadius: 4,
+          }}
+        />
+        <View
+          style={{
+            height: 11,
+            width: "68%",
+            backgroundColor: palette.bgMuted,
+            borderRadius: 4,
+          }}
+        />
+        <View
+          style={{
+            height: 6,
+            width: "100%",
+            backgroundColor: palette.bgMuted,
+            borderRadius: 3,
+            marginTop: 2,
+          }}
+        />
+      </View>
+    </View>
+  );
+}
+
 function PortfolioCardRow({
   card,
   onDelete,
   onPress,
   valuation,
   valuationLoading,
+  valuationRefreshing,
   onSalesTap,
 }: {
   card: PortfolioCard;
@@ -141,6 +185,7 @@ function PortfolioCardRow({
   onPress: (card: PortfolioCard) => void;
   valuation: PortfolioValuation | null | undefined;
   valuationLoading: boolean;
+  valuationRefreshing: boolean;
   onSalesTap: (listings: SoldListing[], cardName: string, avgCents: number | null, cardImageUrl: string | null, cardInfo: { player_name: string; set_name?: string | null; year?: number | null; card_number?: string | null; grade?: string | null }) => void;
 }) {
   const height = useRef(new Animated.Value(1)).current;
@@ -233,6 +278,9 @@ function PortfolioCardRow({
           padding: 14,
           overflow: "hidden",
           ...shadow.sm,
+          ...(valuationRefreshing
+            ? { borderWidth: 1, borderColor: palette.primaryBg }
+            : {}),
         }}
       >
         {/* Thin sport-colored accent bar on the left edge */}
@@ -353,7 +401,7 @@ function PortfolioCardRow({
         {/* Valuation bar */}
         <TouchableOpacity
           activeOpacity={0.6}
-          disabled={!valuation || valuationLoading}
+          disabled={!valuation || valuationLoading || valuationRefreshing}
           onPress={(e) => {
             e.stopPropagation();
             if (valuation) {
@@ -376,7 +424,9 @@ function PortfolioCardRow({
             borderTopColor: palette.borderSoft,
           }}
         >
-          {valuationLoading ? (
+          {valuationRefreshing ? (
+            <ValuationUpdatingBlock />
+          ) : valuationLoading ? (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
               <ActivityIndicator size="small" color={palette.textSubtle} />
               <Text style={{ fontSize: 11, color: palette.textMuted }}>Checking market...</Text>
@@ -547,6 +597,8 @@ export default function PortfolioScreen() {
   const queryClient = useQueryClient();
   const [portfolioFilter, setPortfolioFilter] = useState<PortfolioFilter>("all");
   const [editingCard, setEditingCard] = useState<PortfolioCard | null>(null);
+  const [paywallVisible, setPaywallVisible] = useState(false);
+  const [refreshingCardIds, setRefreshingCardIds] = useState<Set<string>>(() => new Set());
   const [salesModal, setSalesModal] = useState<{
     listings: SoldListing[];
     cardName: string;
@@ -577,22 +629,12 @@ export default function PortfolioScreen() {
     enabled: !!user,
   });
 
-  const { data: valuations = {}, isLoading: valuationsLoading } = useQuery<
-    Record<string, PortfolioValuation | null>
-  >({
-    queryKey: ["portfolio-valuations", cards.map((c) => c.id).join(",")],
-    queryFn: async () => {
-      const results: Record<string, PortfolioValuation | null> = {};
-      await Promise.all(
-        cards.map(async (card) => {
-          results[card.id] = await fetchPortfolioValuation(toValuationInput(card));
-        })
-      );
-      return results;
-    },
-    enabled: cards.length > 0,
-    staleTime: 1000 * 60 * 15,
-  });
+  const {
+    valuations,
+    hasValuations,
+    valuationsLoading,
+    cardIdsKey,
+  } = usePortfolioValuations(cards, user?.id);
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -674,10 +716,6 @@ export default function PortfolioScreen() {
       }, 0),
     [cards, valuations]
   );
-  const hasValuations = useMemo(
-    () => Object.values(valuations).some(Boolean),
-    [valuations]
-  );
   const totalPL = useMemo(
     () => (hasValuations ? totalCurrentValue - totalInvested : null),
     [hasValuations, totalCurrentValue, totalInvested]
@@ -710,6 +748,9 @@ export default function PortfolioScreen() {
   });
 
   const refreshPricesMutation = useMutation({
+    onMutate: () => {
+      setRefreshingCardIds(new Set(cards.map((c) => c.id)));
+    },
     mutationFn: async () => {
       if (!user) throw new Error("Sign in to refresh prices");
       const consumed = await consumeRefreshQuota(user.id, "portfolio");
@@ -718,36 +759,65 @@ export default function PortfolioScreen() {
       }
 
       clearValuationCache();
-      const results: Record<string, PortfolioValuation | null> = {};
+      const results: Record<string, PortfolioValuation | null> = { ...valuations };
+
       await Promise.all(
         cards.map(async (card) => {
-          results[card.id] = await fetchPortfolioValuation(toValuationInput(card), {
-            forceRefresh: true,
-          });
+          try {
+            const val = await fetchPortfolioValuation(toValuationInput(card), {
+              forceRefresh: true,
+            });
+            results[card.id] = val;
+            queryClient.setQueryData<Record<string, PortfolioValuation | null>>(
+              ["portfolio-valuations", user.id, cardIdsKey],
+              (old) => ({ ...(old ?? {}), [card.id]: val })
+            );
+          } finally {
+            setRefreshingCardIds((prev) => {
+              const next = new Set(prev);
+              next.delete(card.id);
+              return next;
+            });
+          }
         })
       );
       return results;
     },
     onSuccess: (results) => {
-      queryClient.setQueryData(
-        ["portfolio-valuations", cards.map((c) => c.id).join(",")],
-        results
-      );
+      if (user) persistValuations(user.id, cardIdsKey, results);
+      queryClient.setQueryData(["portfolio-valuations", user?.id, cardIdsKey], results);
       queryClient.invalidateQueries({ queryKey: ["refresh-quota", user?.id] });
-      showToast("Prices refreshed");
+      showToast("Comps updated");
     },
     onError: (error: Error) => {
+      if (error.message.includes("No refreshes left")) {
+        setPaywallVisible(true);
+        return;
+      }
       showToast(error.message);
     },
+    onSettled: () => {
+      setRefreshingCardIds(new Set());
+    },
   });
+
+  const isLiveRefreshing = refreshingCardIds.size > 0;
+  const refreshProgressLabel =
+    isLiveRefreshing && cards.length > 0
+      ? `${cards.length - refreshingCardIds.size} of ${cards.length} updated`
+      : null;
 
   const handleRefreshPrices = useCallback(() => {
     if (cards.length === 0) {
       showToast("Add cards to refresh prices");
       return;
     }
+    if (refreshQuota && !refreshQuota.isPro && refreshQuota.remaining <= 0) {
+      setPaywallVisible(true);
+      return;
+    }
     refreshPricesMutation.mutate();
-  }, [cards.length, refreshPricesMutation, showToast]);
+  }, [cards.length, refreshQuota, refreshPricesMutation, showToast]);
 
   const snapshotSyncedRef = useRef<string | null>(null);
 
@@ -908,26 +978,41 @@ export default function PortfolioScreen() {
           {/* Portfolio value + P/L row */}
           {(hasValuations || valuationsLoading) && (
             <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
-              <PortfolioStat label="MARKET VALUE" subtitle="eBay comps">
-                {valuationsLoading ? (
+              <PortfolioStat
+                label="MARKET VALUE"
+                subtitle={refreshProgressLabel ?? "eBay comps"}
+              >
+                {valuationsLoading && !hasValuations ? (
                   <ActivityIndicator size="small" color={palette.textSubtle} style={{ marginTop: 10 }} />
                 ) : (
-                  <AnimatedNumber
-                    value={totalCurrentValue}
-                    formatter={formatCents}
-                    style={{ fontSize: 26, fontWeight: "700", color: palette.text, letterSpacing: -0.6, marginTop: 8 }}
-                  />
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 }}>
+                    <AnimatedNumber
+                      value={totalCurrentValue}
+                      formatter={formatCents}
+                      style={{
+                        fontSize: 26,
+                        fontWeight: "700",
+                        color: palette.text,
+                        letterSpacing: -0.6,
+                      }}
+                    />
+                    {isLiveRefreshing && (
+                      <ActivityIndicator size="small" color={palette.primary} />
+                    )}
+                  </View>
                 )}
               </PortfolioStat>
               <PortfolioStat
                 label="TOTAL P/L"
                 subtitle={
-                  totalPL !== null && totalInvested > 0
-                    ? `${totalPL >= 0 ? "+" : ""}${((totalPL / totalInvested) * 100).toFixed(1)}%`
-                    : "Unrealized"
+                  isLiveRefreshing
+                    ? (refreshProgressLabel ?? "Updating")
+                    : totalPL !== null && totalInvested > 0
+                      ? `${totalPL >= 0 ? "+" : ""}${((totalPL / totalInvested) * 100).toFixed(1)}%`
+                      : "Unrealized"
                 }
               >
-                {valuationsLoading ? (
+                {valuationsLoading && !hasValuations ? (
                   <ActivityIndicator size="small" color={palette.textSubtle} style={{ marginTop: 10 }} />
                 ) : totalPL !== null ? (
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8 }}>
@@ -941,6 +1026,9 @@ export default function PortfolioScreen() {
                       formatter={formatCents}
                       style={{ fontSize: 26, fontWeight: "700", color: totalPLColor, letterSpacing: -0.6 }}
                     />
+                    {isLiveRefreshing && (
+                      <ActivityIndicator size="small" color={totalPLColor} />
+                    )}
                   </View>
                 ) : (
                   <Text
@@ -962,7 +1050,7 @@ export default function PortfolioScreen() {
             <View style={{ marginTop: 12 }}>
               <ValuationRefreshButton
                 quota={refreshQuota ?? undefined}
-                loading={refreshPricesMutation.isPending || valuationsLoading}
+                loading={refreshPricesMutation.isPending}
                 onPress={handleRefreshPrices}
               />
             </View>
@@ -1071,7 +1159,8 @@ export default function PortfolioScreen() {
               onDelete={handleDelete}
               onPress={setEditingCard}
               valuation={valuations[card.id]}
-              valuationLoading={valuationsLoading}
+              valuationLoading={valuationsLoading && !valuations[card.id]}
+              valuationRefreshing={refreshingCardIds.has(card.id)}
               onSalesTap={handleSalesTap}
             />
           ))}
@@ -1097,6 +1186,8 @@ export default function PortfolioScreen() {
         cardImageUrl={salesModal?.cardImageUrl}
         card={salesModal?.card}
       />
+
+      <RefreshPaywallModal visible={paywallVisible} onClose={() => setPaywallVisible(false)} />
     </>
   );
 }

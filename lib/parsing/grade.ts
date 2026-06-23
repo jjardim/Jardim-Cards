@@ -106,3 +106,31 @@ export function formatGradeToken(selection: GradeSelection): string {
   if (selection.kind === "raw" || !selection.company || !selection.score) return "";
   return `${selection.company} ${selection.score}`;
 }
+
+export interface GradeParts {
+  company: GradingCompany | null;
+  score: string | null;
+  label: string;
+}
+
+/** Split "PSA 9" into company + score for display badges. */
+export function parseGradeParts(grade: string | null | undefined): GradeParts {
+  const trimmed = grade?.trim() ?? "";
+  if (!trimmed) return { company: null, score: null, label: "Raw" };
+
+  const extracted = extractGrade(trimmed);
+  const token = extracted ?? trimmed;
+  if (/^GEM MINT/i.test(token)) {
+    const score = token.replace(/^GEM MINT\s*/i, "");
+    return { company: "PSA", score, label: token };
+  }
+
+  const match = token.match(/^(PSA|BGS|SGC|CGC)\s+(.+)$/i);
+  if (match && isGradingCompany(match[1].toUpperCase())) {
+    const company = match[1].toUpperCase() as GradingCompany;
+    return { company, score: match[2], label: `${company} ${match[2]}` };
+  }
+
+  return { company: null, score: null, label: token };
+}
+

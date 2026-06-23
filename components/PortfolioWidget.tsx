@@ -1,22 +1,77 @@
 import { View, Text, TouchableOpacity } from "react-native";
+import { useEffect, useRef } from "react";
 import { useRouter } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { AnimatedNumber } from "./AnimatedNumber";
 import { formatCents } from "@/lib/utils";
-import { fetchPortfolioValuation } from "@/lib/api";
-import { toValuationInput } from "@/lib/valuation";
-import type { PortfolioValuation } from "@/lib/api";
+import { usePortfolioValuations } from "@/lib/use-portfolio-valuations";
 import { useAuth } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase";
-import type { PortfolioCard } from "@/lib/types";
+import { fetchLatestPortfolioSnapshot, upsertPortfolioSnapshot } from "@/lib/portfolio-snapshots";
+import type { PortfolioCard, PortfolioSnapshot } from "@/lib/types";
 import { palette, radius, shadow } from "@/lib/theme";
 
 const COLORS = { green: "#4ade80", red: "#fb7185", gray: palette.textInverseMuted } as const;
 
+function formatSnapshotDate(snapshotDate: string): string {
+  const parsed = new Date(`${snapshotDate}T12:00:00`);
+  if (Number.isNaN(parsed.getTime())) return snapshotDate;
+  return parsed.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function formatRelativeUpdated(timestampMs: number): string {
+  const mins = Math.floor((Date.now() - timestampMs) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return new Date(timestampMs).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function FreshnessPill({
+  updating,
+  label,
+}: {
+  updating: boolean;
+  label: string | null;
+}) {
+  if (!updating && !label) return null;
+
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 5,
+        backgroundColor: updating ? "rgba(251,191,36,0.14)" : "rgba(255,255,255,0.08)",
+        borderRadius: radius.pill,
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        maxWidth: "62%",
+      }}
+    >
+      {updating && <FontAwesome name="refresh" size={9} color="#fbbf24" />}
+      <Text
+        style={{
+          fontSize: 10,
+          fontWeight: "600",
+          color: updating ? "#fbbf24" : palette.textInverseMuted,
+        }}
+        numberOfLines={1}
+      >
+        {updating ? "Updating" : "Updated"}
+        {label ? ` · ${label}` : ""}
+      </Text>
+    </View>
+  );
+}
+
 export function PortfolioWidget() {
   const { user } = useAuth();
   const router = useRouter();
+  const queryClient = useQueryClient();
+  const snapshotSyncedRef = useRef<string | null>(null);
 
   const { data: cards = [] } = useQuery<PortfolioCard[]>({
     queryKey: ["portfolio", user?.id],
@@ -33,35 +88,90 @@ export function PortfolioWidget() {
     enabled: !!user,
   });
 
-  const { data: valuations = {}, isLoading: valuationsLoading } = useQuery<
-    Record<string, PortfolioValuation | null>
-  >({
-    queryKey: ["portfolio-valuations", cards.map((c) => c.id).join(",")],
+  const { data: latestSnapshot = null } = useQuery<PortfolioSnapshot | null>({
+    queryKey: ["portfolio-snapshot-latest", user?.id],
     queryFn: async () => {
-      const results: Record<string, PortfolioValuation | null> = {};
-      await Promise.all(
-        cards.map(async (card) => {
-          results[card.id] = await fetchPortfolioValuation(toValuationInput(card));
-        })
-      );
-      return results;
+      if (!user) return null;
+      return fetchLatestPortfolioSnapshot(user.id);
     },
-    enabled: cards.length > 0,
-    staleTime: 1000 * 60 * 15,
+    enabled: !!user,
+    staleTime: 1000 * 60 * 5,
   });
 
-  if (!user || cards.length === 0) return null;
+  const {
+    valuations,
+    hasValuations: hasLiveValuations,
+    valuationsLoading,
+    isFetching: valuationsFetching,
+    dataUpdatedAt,
+  } = usePortfolioValuations(cards, user?.id);
 
   const totalCards = cards.reduce((s, c) => s + c.quantity, 0);
   const totalInvested = cards.reduce((s, c) => s + c.purchase_price_cents * c.quantity, 0);
-  const totalCurrentValue = cards.reduce((s, c) => {
+  const liveCurrentValue = cards.reduce((s, c) => {
     const v = valuations[c.id];
     return s + (v ? v.currentValueCents * c.quantity : 0);
   }, 0);
-  const hasValuations = Object.values(valuations).some(Boolean);
-  const totalPL = hasValuations ? totalCurrentValue - totalInvested : null;
-  const plColor = totalPL !== null ? (totalPL >= 0 ? COLORS.green : COLORS.red) : COLORS.gray;
-  const plPct = totalPL !== null && totalInvested > 0 ? (totalPL / totalInvested) * 100 : null;
+
+  useEffect(() => {
+    if (!user || !hasLiveValuations || valuationsLoading || cards.length === 0) return;
+
+    const syncKey = `${user.id}:${liveCurrentValue}:${totalInvested}:${totalCards}`;
+    if (snapshotSyncedRef.current === syncKey) return;
+
+    snapshotSyncedRef.current = syncKey;
+    upsertPortfolioSnapshot({
+      userId: user.id,
+      totalValueCents: liveCurrentValue,
+      totalCostCents: totalInvested,
+      cardCount: totalCards,
+    })
+      .then(() => {
+        queryClient.invalidateQueries({ queryKey: ["portfolio-snapshot-latest", user.id] });
+        queryClient.invalidateQueries({ queryKey: ["portfolio-snapshots", user.id] });
+      })
+      .catch(() => {
+        snapshotSyncedRef.current = null;
+      });
+  }, [
+    user,
+    hasLiveValuations,
+    valuationsLoading,
+    cards.length,
+    liveCurrentValue,
+    totalInvested,
+    totalCards,
+    queryClient,
+  ]);
+
+  if (!user || cards.length === 0) return null;
+
+  const displayValue = hasLiveValuations
+    ? liveCurrentValue
+    : latestSnapshot
+      ? latestSnapshot.total_value_cents
+      : totalInvested;
+
+  const displayPL = hasLiveValuations
+    ? liveCurrentValue - totalInvested
+    : latestSnapshot
+      ? latestSnapshot.total_value_cents - latestSnapshot.total_cost_cents
+      : null;
+
+  const plColor =
+    displayPL !== null ? (displayPL >= 0 ? COLORS.green : COLORS.red) : COLORS.gray;
+  const plPct =
+    displayPL !== null && totalInvested > 0 ? (displayPL / totalInvested) * 100 : null;
+
+  const hasCachedDisplay = hasLiveValuations || latestSnapshot !== null;
+  const isInitialLoad = valuationsLoading && !hasCachedDisplay;
+  const isRefreshing = valuationsFetching && hasCachedDisplay;
+
+  const freshnessLabel = hasLiveValuations
+    ? formatRelativeUpdated(dataUpdatedAt)
+    : latestSnapshot
+      ? formatSnapshotDate(latestSnapshot.snapshot_date)
+      : null;
 
   return (
     <TouchableOpacity
@@ -76,7 +186,6 @@ export function PortfolioWidget() {
         ...shadow.md,
       }}
     >
-      {/* Decorative glow in the top-right */}
       <View
         style={{
           position: "absolute",
@@ -132,10 +241,25 @@ export function PortfolioWidget() {
       </View>
 
       <View style={{ marginTop: 16 }}>
-        <Text style={{ fontSize: 11, color: palette.textInverseMuted, fontWeight: "600", letterSpacing: 0.4 }}>
-          MARKET VALUE
-        </Text>
-        {valuationsLoading ? (
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+          }}
+        >
+          <Text
+            style={{ fontSize: 11, color: palette.textInverseMuted, fontWeight: "600", letterSpacing: 0.4 }}
+          >
+            MARKET VALUE
+          </Text>
+          <FreshnessPill
+            updating={isRefreshing || isInitialLoad}
+            label={freshnessLabel}
+          />
+        </View>
+        {isInitialLoad ? (
           <Text
             style={{
               fontSize: 34,
@@ -145,11 +269,11 @@ export function PortfolioWidget() {
               letterSpacing: -0.8,
             }}
           >
-            Updating...
+            —
           </Text>
         ) : (
           <AnimatedNumber
-            value={hasValuations ? totalCurrentValue : totalInvested}
+            value={displayValue}
             formatter={formatCents}
             style={{
               fontSize: 34,
@@ -157,19 +281,25 @@ export function PortfolioWidget() {
               color: palette.textInverse,
               marginTop: 4,
               letterSpacing: -0.8,
+              opacity: isRefreshing ? 0.88 : 1,
             }}
           />
         )}
-        {!valuationsLoading && !hasValuations && (
+        {!hasLiveValuations && !isInitialLoad && latestSnapshot && (
+          <Text style={{ fontSize: 11, color: palette.textInverseMuted, marginTop: 4 }}>
+            Last saved total · refreshing live comps
+          </Text>
+        )}
+        {!hasLiveValuations && !isInitialLoad && !latestSnapshot && (
           <Text style={{ fontSize: 11, color: palette.textInverseMuted, marginTop: 4 }}>
             Showing cost basis until live comps load
           </Text>
         )}
-        {totalPL !== null && (
+        {displayPL !== null && !isInitialLoad && (
           <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6, marginTop: 4 }}>
             <Text style={{ fontSize: 14, fontWeight: "700", color: plColor }}>
-              {totalPL >= 0 ? "+" : ""}
-              {formatCents(totalPL)}
+              {displayPL >= 0 ? "+" : ""}
+              {formatCents(displayPL)}
             </Text>
             {plPct !== null && (
               <Text style={{ fontSize: 12, fontWeight: "600", color: plColor }}>

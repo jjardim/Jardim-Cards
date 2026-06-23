@@ -7,7 +7,7 @@ import {
   TextInput,
   ActivityIndicator,
 } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueries } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { StatCard } from "@/components/StatCard";
@@ -15,13 +15,15 @@ import { TrendBadge } from "@/components/TrendBadge";
 import { CardImage } from "@/components/CardImage";
 import { HotCarousel } from "@/components/HotCarousel";
 import { PortfolioWidget } from "@/components/PortfolioWidget";
+import { WorthWatchingWidget } from "@/components/WorthWatchingWidget";
 import { RecentSoldFeed } from "@/components/RecentSoldFeed";
 import { HottestHero } from "@/components/HottestHero";
 import { SportMix } from "@/components/SportMix";
+import { buildCardDetailHref } from "@/lib/card-routes";
 import { formatCents, formatPct } from "@/lib/utils";
 import { fetchTrending } from "@/lib/api";
-import { SPORTS } from "@/lib/types";
-import type { MarketMover } from "@/lib/types";
+import { processTrendingCards, splitTrendLists, pickTopGainer } from "@/lib/trending-utils";
+import { SPORTS, type MarketMover, type Sport } from "@/lib/types";
 import { palette, radius, shadow, getSportTheme } from "@/lib/theme";
 
 const ERAS = [
@@ -98,39 +100,28 @@ export default function DashboardScreen() {
     queryFn: () => fetchTrending(sport || undefined, era.min, era.max),
   });
 
-  const filtered = useMemo(() => {
-    // Dedupe by searchKey defensively — DB now enforces uniqueness via
-    // (search_key, grade), but a card with multiple grades will surface
-    // multiple entries here. Keep the highest-volume row per searchKey.
-    const bySearchKey = new Map<string, MarketMover>();
-    for (const c of trending) {
-      const existing = bySearchKey.get(c.searchKey);
-      if (!existing || c.numSales > existing.numSales) bySearchKey.set(c.searchKey, c);
-    }
-    let items = Array.from(bySearchKey.values());
-    if (tier.min > 0 || tier.max < Infinity) {
-      items = items.filter((c) => c.avgPriceCents >= tier.min && c.avgPriceCents <= tier.max);
-    }
-    return items;
-  }, [trending, tier]);
+  const filtered = useMemo(() => processTrendingCards(trending, tier), [trending, tier]);
 
-  // Trend lists exclude cards with no baseline (null trend) — showing them
-  // in "Top Gainers" with "\u2014" would be confusing.
-  const withTrend = useMemo(
-    () => filtered.filter((c): c is MarketMover & { trend7dPct: number } => c.trend7dPct !== null),
-    [filtered]
-  );
-  const gainers = useMemo(
-    () => withTrend.filter((c) => c.trend7dPct > 0).sort((a, b) => b.trend7dPct - a.trend7dPct),
-    [withTrend]
-  );
-  const losers = useMemo(
-    () => withTrend.filter((c) => c.trend7dPct < 0).sort((a, b) => a.trend7dPct - b.trend7dPct),
-    [withTrend]
-  );
+  const { withTrend, gainers, losers } = useMemo(() => splitTrendLists(filtered), [filtered]);
   const trendList = trendTab === "gainers" ? gainers : losers;
 
-  const topGainer = gainers[0] ?? null;
+  const categoryTrendQueries = useQueries({
+    queries: SPORTS.map((s) => ({
+      queryKey: ["trending", s, era.min, era.max],
+      queryFn: () => fetchTrending(s, era.min, era.max),
+    })),
+  });
+
+  const hottestBySport = useMemo(() => {
+    const result: Partial<Record<Sport, MarketMover>> = {};
+    SPORTS.forEach((s, i) => {
+      const data = categoryTrendQueries[i]?.data ?? [];
+      const top = pickTopGainer(processTrendingCards(data, tier));
+      if (top) result[s] = top;
+    });
+    return result;
+  }, [categoryTrendQueries, tier]);
+
   const topDecliner = losers[0] ?? null;
   const totalVolume = useMemo(() => filtered.reduce((s, c) => s + c.numSales, 0), [filtered]);
   const avgTrend = useMemo(() => {
@@ -144,7 +135,11 @@ export default function DashboardScreen() {
   };
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: palette.bg }}>
+    <ScrollView
+      style={{ flex: 1, backgroundColor: palette.bg }}
+      keyboardShouldPersistTaps="handled"
+      nestedScrollEnabled
+    >
       <View style={{ padding: 16, paddingBottom: 32 }}>
         {/* Header */}
         <View
@@ -321,15 +316,16 @@ export default function DashboardScreen() {
         </ScrollView>
 
         {/* Hottest Card dark hero */}
-        {topGainer && (
-          <HottestHero
-            card={topGainer}
-            onPress={() => router.push(`/card/${topGainer.searchKey}`)}
-          />
-        )}
+        <HottestHero
+          hottestBySport={hottestBySport}
+          onPress={(card) => router.push(buildCardDetailHref(card) as never)}
+        />
 
         {/* Portfolio widget */}
         <PortfolioWidget />
+
+        {/* Market movers — discover + watchlist CTA */}
+        <WorthWatchingWidget yearMin={era.min} yearMax={era.max} />
 
         {/* Loading */}
         {isLoading && (
@@ -376,7 +372,7 @@ export default function DashboardScreen() {
                 subtitle={topDecliner.setName ?? undefined}
                 accent={palette.dangerBg}
                 icon={<FontAwesome name="arrow-down" size={11} color={palette.danger} />}
-                onPress={() => router.push(`/card/${topDecliner.searchKey}`)}
+                onPress={() => router.push(buildCardDetailHref(topDecliner) as never)}
               />
             </View>
           )}
@@ -482,7 +478,7 @@ export default function DashboardScreen() {
               <TouchableOpacity
                 key={card.searchKey}
                 activeOpacity={0.7}
-                onPress={() => router.push(`/card/${card.searchKey}`)}
+                onPress={() => router.push(buildCardDetailHref(card) as never)}
                 style={{
                   backgroundColor: palette.surface,
                   borderRadius: radius.lg,

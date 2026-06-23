@@ -13,16 +13,19 @@ export function ValuationRefreshButton({
   onPress: () => void;
 }) {
   const exhausted = !!quota && !quota.isPro && quota.remaining <= 0;
+
   const subtitle = quota?.isPro
-    ? "Unlimited"
+    ? "Unlimited updates"
     : quota
-      ? `${quota.remaining} left today`
+      ? exhausted
+        ? "Resets tomorrow"
+        : `${quota.remaining} update${quota.remaining === 1 ? "" : "s"} left today`
       : null;
 
   return (
     <TouchableOpacity
       onPress={onPress}
-      disabled={loading || exhausted}
+      disabled={loading}
       activeOpacity={0.85}
       style={{
         flexDirection: "row",
@@ -34,8 +37,7 @@ export function ValuationRefreshButton({
         paddingHorizontal: 14,
         paddingVertical: 9,
         borderWidth: 1,
-        borderColor: palette.borderSoft,
-        opacity: exhausted ? 0.5 : 1,
+        borderColor: exhausted ? palette.warning : palette.borderSoft,
       }}
     >
       {loading ? (
@@ -44,7 +46,9 @@ export function ValuationRefreshButton({
         <FontAwesome name="refresh" size={12} color={palette.primary} />
       )}
       <View>
-        <Text style={{ fontSize: 13, fontWeight: "700", color: palette.text }}>Refresh prices</Text>
+        <Text style={{ fontSize: 13, fontWeight: "700", color: palette.text }}>
+          Update to latest comps
+        </Text>
         {subtitle ? (
           <Text style={{ fontSize: 10, color: palette.textSubtle, marginTop: 1 }}>{subtitle}</Text>
         ) : null}

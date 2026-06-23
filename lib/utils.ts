@@ -13,9 +13,15 @@ export function formatPct(pct: number | null): string {
 
 /** Short sold date for comp links, e.g. "Mar 8". */
 export function formatCompSaleDate(isoDate: string): string {
-  const parsed = new Date(isoDate);
+  const dateOnly = isoDate.match(/^(\d{4}-\d{2}-\d{2})/);
+  const parsed = dateOnly ? new Date(`${dateOnly[1]}T12:00:00`) : new Date(isoDate);
   if (Number.isNaN(parsed.getTime())) return isoDate;
   return parsed.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+/** Sold comp chip / row label, e.g. "Sold · Jun 23". */
+export function formatSoldCompLabel(isoDate: string): string {
+  return `Sold · ${formatCompSaleDate(isoDate)}`;
 }
 
 export function trendColor(pct: number | null): "green" | "red" | "gray" {

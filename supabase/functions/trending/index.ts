@@ -85,6 +85,7 @@ Deno.serve(async (req: Request) => {
       trend7dPct: (row.trend_7d_pct as number | null) ?? null,
       trend30dPct: (row.trend_30d_pct as number | null) ?? null,
       numSales: row.num_sales,
+      grade: ((row.grade as string | null) ?? "").trim() || null,
     }));
 
     return new Response(JSON.stringify({ trending, count: trending.length }), {

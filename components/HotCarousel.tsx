@@ -2,6 +2,7 @@ import { View, Text, ScrollView, TouchableOpacity } from "react-native";
 import { useRouter } from "expo-router";
 import { CardImage } from "./CardImage";
 import { TrendBadge } from "./TrendBadge";
+import { buildCardDetailHref } from "@/lib/card-routes";
 import { formatCents } from "@/lib/utils";
 import { palette, radius, shadow, getSportTheme } from "@/lib/theme";
 import type { MarketMover } from "@/lib/types";
@@ -56,7 +57,7 @@ export function HotCarousel({ cards }: HotCarouselProps) {
             <TouchableOpacity
               key={card.searchKey}
               activeOpacity={0.75}
-              onPress={() => router.push(`/card/${card.searchKey}`)}
+              onPress={() => router.push(buildCardDetailHref(card) as never)}
               style={{
                 width: 164,
                 backgroundColor: palette.surface,

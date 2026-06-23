@@ -140,6 +140,8 @@ export interface MarketMover {
   trend7dPct: number | null;
   trend30dPct: number | null;
   numSales: number;
+  /** Grade tier for this aggregate row (e.g. "PSA 9"). Empty string = raw/ungraded bucket. */
+  grade: string | null;
 }
 
 export interface CardSearchResult {

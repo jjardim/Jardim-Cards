@@ -16,12 +16,15 @@ import { LineChart } from "react-native-gifted-charts";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { TrendBadge } from "@/components/TrendBadge";
 import { CardImage } from "@/components/CardImage";
-import { formatCents, formatPct } from "@/lib/utils";
+import { formatCents, formatPct, formatCompSaleDate, formatSoldCompLabel } from "@/lib/utils";
 import { getCardDetail, fetchActiveListingsForCard, fetchCardValuation, clearValuationCache } from "@/lib/api";
+import { computeBuySignal } from "@/lib/mock-data";
 import type { SoldListing, ActiveListing } from "@/lib/api";
 import { toValuationInput } from "@/lib/valuation";
-import { ValuationHeader } from "@/components/ValuationBlock";
+import { ValuationHeader, CompSaleLinks } from "@/components/ValuationBlock";
 import { formatCompStatsLabel } from "@/lib/pricing/comp-match";
+import { parseGradeParts, extractGrade } from "@/lib/parsing/grade";
+import { buildCardDetailHref } from "@/lib/card-routes";
 import { palette, radius, shadow, getSportTheme } from "@/lib/theme";
 import { useAuth } from "@/lib/auth-context";
 import { consumeRefreshQuota, getRefreshQuota } from "@/lib/valuation-refresh";
@@ -87,8 +90,9 @@ export default function CardDetailScreen() {
   const priceHistory = detail?.priceHistory ?? [];
   const relatedCards = detail?.relatedCards ?? [];
   const soldListings = detail?.soldListings ?? [];
-  const buySignal = detail?.buySignal ?? null;
   const trendReason = detail?.trendReason ?? "";
+
+  const effectiveGrade = gradeStr ?? card?.grade ?? null;
 
   const valuationInput = useMemo(
     () =>
@@ -98,20 +102,20 @@ export default function CardDetailScreen() {
             set_name: setStr ?? card.setName,
             year: yearStr ? parseInt(yearStr, 10) : card.year,
             card_number: null,
-            grade: gradeStr ?? null,
+            grade: effectiveGrade,
             image_url: card.imageUrl,
             ebay_title: null,
             pricecharting_id: pricechartingId ?? null,
           })
         : null,
-    [card, playerStr, setStr, yearStr, gradeStr, pricechartingId]
+    [card, playerStr, setStr, yearStr, effectiveGrade, pricechartingId]
   );
 
   const valuationQueryKey = [
     "card-valuation",
     searchKey,
     pricechartingId,
-    gradeStr,
+    effectiveGrade,
     playerStr,
   ] as const;
 
@@ -162,6 +166,23 @@ export default function CardDetailScreen() {
   const headlineCents = valuation?.currentValueCents ?? card?.avgPriceCents ?? 0;
   const trend7dPct = valuation?.trend7dPct ?? card?.trend7dPct ?? null;
 
+  const buySignal = useMemo(() => {
+    if (headlineCents <= 0) return null;
+    return computeBuySignal({
+      avgPriceCents: headlineCents,
+      trend7dPct,
+    });
+  }, [headlineCents, trend7dPct]);
+
+  const gradeMatchedSold = useMemo(() => {
+    if (!effectiveGrade) return soldListings;
+    const matched = soldListings.filter((listing) => {
+      const listingGrade = extractGrade(listing.title);
+      return listingGrade?.toLowerCase() === effectiveGrade.toLowerCase();
+    });
+    return matched.length > 0 ? matched : soldListings;
+  }, [soldListings, effectiveGrade]);
+
   const [salesTab, setSalesTab] = useState<SalesTab>("sold");
   const [activeListings, setActiveListings] = useState<ActiveListing[]>([]);
   const [loadingActive, setLoadingActive] = useState(false);
@@ -207,19 +228,26 @@ export default function CardDetailScreen() {
   };
 
   const chronoSold = useMemo(
-    () => [...soldListings].sort((a, b) => a.date.localeCompare(b.date)),
-    [soldListings]
+    () => [...gradeMatchedSold].sort((a, b) => a.date.localeCompare(b.date)),
+    [gradeMatchedSold]
   );
+
+  useEffect(() => {
+    if (chronoSold.length > 0) {
+      setFocusedSale(chronoSold[chronoSold.length - 1]);
+    } else {
+      setFocusedSale(null);
+    }
+  }, [searchKey, chronoSold]);
 
   const chartData = useMemo(() => {
     if (chronoSold.length > 0) {
-      // Let the chart-level `dataPointsColor` drive the dot color — per-item
-      // `dataPointColor` previously hardcoded green, which matched the line
-      // color and made the dots invisible. Tappable dots are the whole point
-      // of this chart, so we want them to contrast with the trend line.
+      // Per-point onPress is more reliable on web than focusEnabled alone —
+      // the area fill can swallow SVG pointer events before they reach dots.
       return chronoSold.map((s) => ({
         value: s.priceCents / 100,
         label: "",
+        onPress: () => setFocusedSale(s),
       }));
     }
     return priceHistory
@@ -228,11 +256,11 @@ export default function CardDetailScreen() {
   }, [chronoSold, priceHistory]);
 
   const sortedSold = useMemo(() => {
-    const items = [...soldListings];
+    const items = [...gradeMatchedSold];
     if (soldSort === "low") return items.sort((a, b) => a.priceCents - b.priceCents);
     if (soldSort === "high") return items.sort((a, b) => b.priceCents - a.priceCents);
     return items;
-  }, [soldListings, soldSort]);
+  }, [gradeMatchedSold, soldSort]);
 
   const sortedActive = useMemo(() => {
     const items = [...activeListings];
@@ -262,6 +290,7 @@ export default function CardDetailScreen() {
   }
 
   const sportTheme = getSportTheme(card.sport);
+  const gradeParts = parseGradeParts(effectiveGrade ?? valuation?.gradeTierUsed ?? null);
   // Treat unknown trend (null) as neutral — neither green nor red.
   const trendDirection: "up" | "down" | "flat" =
     card.trend7dPct === null ? "flat" : card.trend7dPct >= 0 ? "up" : "down";
@@ -276,12 +305,16 @@ export default function CardDetailScreen() {
   const yOffset = Math.max(0, minVal - (maxVal - minVal) * 0.1);
 
   const visibleSold = soldExpanded ? sortedSold : sortedSold.slice(0, 5);
-  const avgSoldPrice = soldListings.length > 0
-    ? Math.round(soldListings.reduce((s, l) => s + l.priceCents, 0) / soldListings.length)
+  const avgSoldPrice = gradeMatchedSold.length > 0
+    ? Math.round(gradeMatchedSold.reduce((s, l) => s + l.priceCents, 0) / gradeMatchedSold.length)
     : null;
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: palette.bg }}>
+    <ScrollView
+      style={{ flex: 1, backgroundColor: palette.bg }}
+      keyboardShouldPersistTaps="handled"
+      nestedScrollEnabled
+    >
       <View style={{ padding: 16 }}>
         {/* Back pill */}
         <TouchableOpacity
@@ -353,22 +386,40 @@ export default function CardDetailScreen() {
               <Text style={{ fontSize: 13, color: palette.textMuted, marginTop: 2 }} numberOfLines={2}>
                 {card.setName} {card.year ? `(${card.year})` : ""}
               </Text>
-              {gradeStr ? (
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
                 <View
                   style={{
-                    alignSelf: "flex-start",
-                    marginTop: 8,
-                    backgroundColor: palette.primaryBg,
+                    backgroundColor: gradeParts.company ? palette.primaryBg : palette.bgMuted,
                     paddingHorizontal: 8,
                     paddingVertical: 3,
                     borderRadius: radius.pill,
                   }}
                 >
-                  <Text style={{ fontSize: 11, color: palette.primary, fontWeight: "700" }}>
-                    {gradeStr}
+                  <Text
+                    style={{
+                      fontSize: 11,
+                      color: gradeParts.company ? palette.primary : palette.textMuted,
+                      fontWeight: "700",
+                    }}
+                  >
+                    {gradeParts.label}
                   </Text>
                 </View>
-              ) : null}
+                {card.avgPriceCents > 0 && !valuation && (
+                  <View
+                    style={{
+                      backgroundColor: palette.bgMuted,
+                      paddingHorizontal: 8,
+                      paddingVertical: 3,
+                      borderRadius: radius.pill,
+                    }}
+                  >
+                    <Text style={{ fontSize: 11, color: palette.textMuted, fontWeight: "600" }}>
+                      Trend avg {formatCents(card.avgPriceCents)}
+                    </Text>
+                  </View>
+                )}
+              </View>
             </View>
             <View style={{ alignItems: "flex-end", maxWidth: "55%" }}>
               {valuationLoading ? (
@@ -397,6 +448,12 @@ export default function CardDetailScreen() {
                   >
                     {formatCompStatsLabel(valuation)}
                   </Text>
+                  <View style={{ marginTop: 8, alignSelf: "flex-end", maxWidth: "100%" }}>
+                    <CompSaleLinks
+                      listings={valuation.soldListings}
+                      grade={effectiveGrade}
+                    />
+                  </View>
                   {user ? (
                     <TouchableOpacity
                       onPress={handleRefreshValuation}
@@ -475,7 +532,7 @@ export default function CardDetailScreen() {
               <Text
                 style={{ fontSize: 16, fontWeight: "700", color: palette.text, letterSpacing: -0.2 }}
               >
-                Sales History
+                Sold comps
               </Text>
               <View
                 style={{
@@ -486,12 +543,12 @@ export default function CardDetailScreen() {
                 }}
               >
                 <Text style={{ fontSize: 10, color: palette.textMuted, fontWeight: "700" }}>
-                  {chronoSold.length > 0 ? `${chronoSold.length} sales` : "90 days"}
+                  {chronoSold.length > 0 ? `${chronoSold.length} sold comps` : "90 days"}
                 </Text>
               </View>
             </View>
             {chronoSold.length > 0 && (
-              <Text style={{ fontSize: 10, color: palette.textSubtle }}>Tap a dot</Text>
+              <Text style={{ fontSize: 10, color: palette.textSubtle }}>Tap a comp below</Text>
             )}
           </View>
           {chartData.length > 0 && (
@@ -522,14 +579,15 @@ export default function CardDetailScreen() {
               isAnimated
               animationDuration={800}
               hideDataPoints={chronoSold.length === 0}
-              dataPointsRadius={4}
+              dataPointsRadius={6}
               dataPointsColor={palette.heroDark}
               dataPointsShape="circular"
               focusEnabled={chronoSold.length > 0}
+              unFocusOnPressOut={false}
               showStripOnFocus
               stripColor={palette.borderSoft}
               stripWidth={1}
-              focusedDataPointRadius={8}
+              focusedDataPointRadius={9}
               focusedDataPointColor={palette.heroDark}
               onFocus={(_item: { value: number }, index: number) => {
                 if (index >= 0 && index < chronoSold.length) {
@@ -537,6 +595,58 @@ export default function CardDetailScreen() {
                 }
               }}
             />
+          )}
+
+          {chronoSold.length > 0 && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              nestedScrollEnabled
+              style={{ marginTop: 10 }}
+              contentContainerStyle={{ gap: 6, paddingRight: 4 }}
+            >
+              {chronoSold.map((sale) => {
+                const active =
+                  focusedSale?.date === sale.date &&
+                  focusedSale.priceCents === sale.priceCents &&
+                  focusedSale.title === sale.title;
+                return (
+                  <TouchableOpacity
+                    key={`${sale.date}-${sale.priceCents}-${sale.title}`}
+                    onPress={() => setFocusedSale(sale)}
+                    activeOpacity={0.8}
+                    style={{
+                      paddingHorizontal: 10,
+                      paddingVertical: 6,
+                      borderRadius: radius.pill,
+                      backgroundColor: active ? palette.heroDark : palette.bgMuted,
+                      borderWidth: 1,
+                      borderColor: active ? palette.heroDark : palette.borderSoft,
+                      ...(Platform.OS === "web" ? { cursor: "pointer" as const } : {}),
+                    }}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 11,
+                        fontWeight: "700",
+                        color: active ? palette.textInverse : palette.text,
+                      }}
+                    >
+                      {formatCents(sale.priceCents)}
+                    </Text>
+                    <Text
+                      style={{
+                        fontSize: 9,
+                        color: active ? palette.textInverseMuted : palette.textSubtle,
+                        marginTop: 1,
+                      }}
+                    >
+                      {formatSoldCompLabel(sale.date)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
           )}
 
           {/* Focused sale tooltip (dark AI-insight-style) */}
@@ -591,7 +701,7 @@ export default function CardDetailScreen() {
                 <Text
                   style={{ fontSize: 11, color: palette.textInverseMuted, marginTop: 2 }}
                 >
-                  Sold {focusedSale.date}
+                  {formatSoldCompLabel(focusedSale.date)}
                 </Text>
               </View>
               <View style={{ alignItems: "flex-end" }}>
@@ -617,11 +727,13 @@ export default function CardDetailScreen() {
             }}
           >
             <Text style={{ fontSize: 11, color: palette.textSubtle }}>
-              {chronoSold.length > 0 && chronoSold[0] ? chronoSold[0].date : "90 days ago"}
+              {chronoSold.length > 0 && chronoSold[0]
+                ? formatCompSaleDate(chronoSold[0].date)
+                : "90 days ago"}
             </Text>
             <Text style={{ fontSize: 11, color: palette.textSubtle }}>
               {chronoSold.length > 0 && chronoSold[chronoSold.length - 1]
-                ? chronoSold[chronoSold.length - 1].date
+                ? formatCompSaleDate(chronoSold[chronoSold.length - 1].date)
                 : "Today"}
             </Text>
           </View>
@@ -846,7 +958,7 @@ export default function CardDetailScreen() {
                     marginTop: 2,
                   }}
                 >
-                  {card.numSales}
+                  {valuation?.compCountGradeSpecific ?? gradeMatchedSold.length}
                 </Text>
               </View>
             </View>
@@ -911,7 +1023,7 @@ export default function CardDetailScreen() {
               {buySignal.label}
             </Text>
             <Text style={{ fontSize: 11, color: "#16a34a", marginTop: 8, fontStyle: "italic" }}>
-              Based on avg price with market momentum discount
+              Target entry for {gradeParts.label} comps ({formatCents(headlineCents)} avg)
             </Text>
           </View>
         )}
@@ -1012,7 +1124,7 @@ export default function CardDetailScreen() {
                   Avg sold: {formatCents(avgSoldPrice)}
                 </Text>
                 <Text style={{ fontSize: 11, color: palette.textMuted }}>
-                  {`\u00B7 ${soldListings.length} sale${soldListings.length !== 1 ? "s" : ""}`}
+                  {`\u00B7 ${gradeMatchedSold.length} sale${gradeMatchedSold.length !== 1 ? "s" : ""}`}
                 </Text>
               </View>
             )}
@@ -1040,7 +1152,7 @@ export default function CardDetailScreen() {
             )}
 
             {/* Sort controls */}
-            {((salesTab === "sold" && soldListings.length > 1) ||
+            {((salesTab === "sold" && gradeMatchedSold.length > 1) ||
               (salesTab === "active" && !loadingActive && activeListings.length > 1)) && (
               <SortPills
                 value={salesTab === "sold" ? soldSort : activeSort}
@@ -1054,7 +1166,7 @@ export default function CardDetailScreen() {
           <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
             {salesTab === "sold" ? (
               <>
-                {soldListings.length === 0 ? (
+                {gradeMatchedSold.length === 0 ? (
                   <View style={{ alignItems: "center", paddingVertical: 28 }}>
                     <FontAwesome name="search" size={22} color={palette.borderSoft} />
                     <Text style={{ color: palette.textSubtle, marginTop: 8, fontSize: 13 }}>
@@ -1071,7 +1183,7 @@ export default function CardDetailScreen() {
                         isLast={idx === visibleSold.length - 1}
                       />
                     ))}
-                    {soldListings.length > 5 && (
+                    {gradeMatchedSold.length > 5 && (
                       <TouchableOpacity
                         onPress={() => setSoldExpanded(!soldExpanded)}
                         activeOpacity={0.7}
@@ -1087,7 +1199,7 @@ export default function CardDetailScreen() {
                         <Text
                           style={{ fontSize: 12, fontWeight: "700", color: palette.primary }}
                         >
-                          {soldExpanded ? "Show less" : `Show all ${soldListings.length} sales`}
+                          {soldExpanded ? "Show less" : `Show all ${gradeMatchedSold.length} sales`}
                         </Text>
                       </TouchableOpacity>
                     )}
@@ -1138,11 +1250,12 @@ export default function CardDetailScreen() {
             </View>
             {relatedCards.map((related) => {
               const relTheme = getSportTheme(related.sport);
+              const gradeParts = parseGradeParts(related.grade);
               return (
                 <TouchableOpacity
-                  key={related.searchKey}
+                  key={`${related.searchKey}-${related.grade ?? "raw"}`}
                   activeOpacity={0.7}
-                  onPress={() => router.push(`/card/${related.searchKey}`)}
+                  onPress={() => router.push(buildCardDetailHref(related) as never)}
                   style={{
                     backgroundColor: palette.surface,
                     borderRadius: radius.lg,
@@ -1180,6 +1293,40 @@ export default function CardDetailScreen() {
                     <Text style={{ fontSize: 12, color: palette.textMuted, marginTop: 2 }}>
                       {related.setName} {related.year ? `(${related.year})` : ""}
                     </Text>
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        flexWrap: "wrap",
+                        alignItems: "center",
+                        gap: 6,
+                        marginTop: 6,
+                      }}
+                    >
+                      <View
+                        style={{
+                          backgroundColor: gradeParts.company ? palette.primaryBg : palette.bgMuted,
+                          paddingHorizontal: 8,
+                          paddingVertical: 3,
+                          borderRadius: radius.pill,
+                        }}
+                      >
+                        <Text
+                          style={{
+                            fontSize: 10,
+                            fontWeight: "800",
+                            color: gradeParts.company ? palette.primary : palette.textMuted,
+                            letterSpacing: 0.2,
+                          }}
+                        >
+                          {gradeParts.company
+                            ? `${gradeParts.company} ${gradeParts.score ?? ""}`.trim()
+                            : "RAW"}
+                        </Text>
+                      </View>
+                      <Text style={{ fontSize: 11, color: palette.textSubtle, fontWeight: "600" }}>
+                        {`${gradeParts.label.toUpperCase()} avg`}
+                      </Text>
+                    </View>
                     <Text
                       style={{
                         fontSize: 15,
@@ -1218,6 +1365,8 @@ function ListingRow({
   isLast: boolean;
 }) {
   const isSold = type === "sold" && "date" in listing;
+  const listingGrade =
+    isSold && "title" in listing ? extractGrade((listing as SoldListing).title) : null;
 
   return (
     <TouchableOpacity
@@ -1270,9 +1419,16 @@ function ListingRow({
           {listing.title}
         </Text>
         {isSold ? (
-          <Text style={{ fontSize: 10, color: palette.textSubtle, marginTop: 3 }}>
-            Sold {(listing as SoldListing).date}
-          </Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 3 }}>
+            <Text style={{ fontSize: 10, color: palette.textSubtle }}>
+              {formatSoldCompLabel((listing as SoldListing).date)}
+            </Text>
+            {listingGrade ? (
+              <Text style={{ fontSize: 10, color: palette.primary, fontWeight: "700" }}>
+                · {listingGrade}
+              </Text>
+            ) : null}
+          </View>
         ) : (
           <View style={{ flexDirection: "row", alignItems: "center", marginTop: 4 }}>
             <View
