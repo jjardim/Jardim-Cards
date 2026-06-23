@@ -1,0 +1,45 @@
+---
+description: Dashboard widget architecture — registry, shell, layout, refresh patterns
+globs: lib/dashboard/**,components/dashboard/**,app/(tabs)/index.tsx
+alwaysApply: false
+---
+
+# Dashboard Widget Architecture
+
+Home screen (`app/(tabs)/index.tsx`) is a thin shell: header, global filters, customize button, pull-to-refresh. All blocks are composable widgets.
+
+## Adding a new widget
+
+1. Add `WidgetId` to `lib/dashboard/types.ts` (`WIDGET_IDS` array).
+2. Register metadata in `lib/dashboard/registry.ts`:
+   - `title`, `description`, `tier` (`free` | `pro`), `defaultEnabled`, `defaultOrder`
+   - `queryKeys(ctx)` — React Query keys this widget owns (used by central refresh)
+   - `usesFilters` if it reads sport/era/priceTier from `DashboardProvider`
+3. Create `components/dashboard/widgets/MyWidget.tsx` — self-contained UI + data (`useQuery` inside).
+4. Map id → component in `components/dashboard/widget-components.ts`.
+5. Wrap with `WidgetErrorBoundary` automatically via `DashboardShell`.
+
+## Rules
+
+- **Widgets own their data.** Never pre-fetch in `index.tsx` and pass down computed props (old `hottestBySport` pattern).
+- **Shared filters** come from `useDashboardContext()` — not props from the screen.
+- **Shared trending** for filter-aware widgets: `useFilteredTrending()` (React Query dedupes by key).
+- **Central refresh**: `useDashboardRefresh(enabledWidgetIds)` invalidates union of registry `queryKeys`. Pull-to-refresh on home uses this.
+- **Layout persistence**: `user_dashboard_layout` Supabase table (`widget_order text[]`). Hook: `useDashboardLayout()`.
+- **Pro gating**: set `tier: "pro"` in registry; `DashboardShell` renders `WidgetLockedPlaceholder` for free users.
+- **Styling**: inline `style={{}}` from `lib/theme.ts` — match existing widgets.
+
+## Key files
+
+| File | Role |
+|---|---|
+| `lib/dashboard/registry.ts` | Widget catalog + query key map |
+| `lib/dashboard/dashboard-context.tsx` | Global filters + plan |
+| `lib/dashboard/use-dashboard-layout.ts` | Enable/order/reorder + Supabase save |
+| `lib/dashboard/use-dashboard-refresh.ts` | Invalidate enabled widget queries |
+| `components/dashboard/DashboardShell.tsx` | Renders ordered widgets |
+| `components/dashboard/CustomizeDashboardModal.tsx` | Add/remove/reorder UI |
+
+## Decision log
+
+- **2026-06-23** — Widget registry + Supabase layout chosen over local-only. All current widgets are `free`; tier field ready for monetization.
