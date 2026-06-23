@@ -6,6 +6,18 @@ export interface Profile {
   updated_at: string;
 }
 
+export interface NotificationPreferences {
+  user_id: string;
+  daily_digest: boolean;
+  watchlist_target: boolean;
+  portfolio_move: boolean;
+  profit_target: boolean;
+  portfolio_move_pct: number;
+  profit_target_pct: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface SoldListing {
   id: string;
   ebay_item_id: string;

@@ -16,6 +16,12 @@ import { router } from "expo-router";
 import { useUserPreferences } from "@/lib/user-preferences-context";
 import { TARGET_PROFIT_OPTIONS } from "@/lib/user-preferences";
 import { palette, radius } from "@/lib/theme";
+import { NotificationSettings } from "@/components/NotificationSettings";
+import {
+  useNotificationPreferences,
+  syncProfitTargetToNotifications,
+} from "@/lib/use-notification-preferences";
+import { hasAnyAlertsEnabled } from "@/lib/notification-preferences";
 
 import {
   type EbayConnectionStatus,
@@ -29,12 +35,52 @@ export default function ProfileScreen() {
   const { user, loading, signOut } = useAuth();
   const { showToast } = useToast();
   const { targetProfitPct, setTargetProfitPct } = useUserPreferences();
+  const {
+    preferences: notificationPrefs,
+    loading: notificationLoading,
+    pushStatus,
+    ensurePushRegistration,
+    savePreferences,
+  } = useNotificationPreferences(user?.id);
+  const [notificationSaving, setNotificationSaving] = useState(false);
 
   const [ebayStatus, setEbayStatus] = useState<EbayConnectionStatus | null>(null);
   const [ebayLoading, setEbayLoading] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [importing, setImporting] = useState(false);
+
+  const handleProfitTargetChange = useCallback(
+    async (pct: number) => {
+      await setTargetProfitPct(pct);
+      if (user) {
+        await syncProfitTargetToNotifications(user.id, pct);
+      }
+    },
+    [setTargetProfitPct, user]
+  );
+
+  const handleNotificationToggle = useCallback(
+    async (
+      key: "daily_digest" | "watchlist_target" | "portfolio_move" | "profit_target",
+      value: boolean
+    ) => {
+      if (!user) return;
+      setNotificationSaving(true);
+      try {
+        const next = await savePreferences({ [key]: value });
+        if (next && hasAnyAlertsEnabled(next)) {
+          await ensurePushRegistration();
+        }
+        showToast(value ? "Alert enabled" : "Alert disabled", "info");
+      } catch {
+        showToast("Failed to save notification settings", "error");
+      } finally {
+        setNotificationSaving(false);
+      }
+    },
+    [user, savePreferences, ensurePushRegistration, showToast]
+  );
 
   const checkEbayStatus = useCallback(async () => {
     if (!user) return;
@@ -332,7 +378,7 @@ export default function ProfileScreen() {
               return (
                 <TouchableOpacity
                   key={pct}
-                  onPress={() => setTargetProfitPct(pct)}
+                  onPress={() => handleProfitTargetChange(pct)}
                   style={{
                     paddingHorizontal: 14,
                     paddingVertical: 8,
@@ -358,6 +404,36 @@ export default function ProfileScreen() {
           <Text style={{ fontSize: 11, color: palette.textSubtle, marginTop: 12 }}>
             {`Ready to sell = unrealized gain ≥ ${targetProfitPct}%. Near target = within 5% below that.`}
           </Text>
+        </View>
+
+        {/* Notifications */}
+        <Text style={{ fontSize: 18, fontWeight: "700", color: palette.text, marginTop: 28, marginBottom: 12 }}>
+          Alerts
+        </Text>
+        <View
+          style={{
+            backgroundColor: palette.surface,
+            borderRadius: radius.lg,
+            padding: 20,
+            borderWidth: 1,
+            borderColor: palette.borderSoft,
+          }}
+        >
+          <Text style={{ fontSize: 15, fontWeight: "700", color: palette.text }}>
+            Push notifications
+          </Text>
+          <Text style={{ fontSize: 13, color: palette.textMuted, marginTop: 6, lineHeight: 18 }}>
+            Daily digest preferred over per-card spam. Alerts run after the morning price refresh.
+          </Text>
+          <View style={{ marginTop: 8 }}>
+            <NotificationSettings
+              preferences={notificationPrefs}
+              loading={notificationLoading}
+              pushStatus={pushStatus}
+              saving={notificationSaving}
+              onToggle={handleNotificationToggle}
+            />
+          </View>
         </View>
 
         {/* eBay Connection */}
