@@ -1,14 +1,27 @@
 import FontAwesome from "@expo/vector-icons/FontAwesome";
-import { DarkTheme, DefaultTheme, ThemeProvider } from "@react-navigation/native";
+import { DefaultTheme, ThemeProvider, type Theme } from "@react-navigation/native";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useFonts } from "expo-font";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect, useState } from "react";
-import { useColorScheme } from "react-native";
 import { AuthProvider } from "@/lib/auth-context";
 import { ToastProvider } from "@/lib/toast-context";
 import { UserPreferencesProvider } from "@/lib/user-preferences-context";
+import { palette } from "@/lib/theme";
+
+/** App UI is light-only (inline palette); avoid DarkTheme washing out tab labels on web. */
+const navigationTheme: Theme = {
+  ...DefaultTheme,
+  colors: {
+    ...DefaultTheme.colors,
+    background: palette.bg,
+    card: palette.surface,
+    text: palette.text,
+    border: palette.borderSoft,
+    primary: palette.primary,
+  },
+};
 
 export { ErrorBoundary } from "expo-router";
 
@@ -38,7 +51,6 @@ export default function RootLayout() {
 }
 
 function RootLayoutNav() {
-  const colorScheme = useColorScheme();
   const [queryClient] = useState(
     () => new QueryClient({ defaultOptions: { queries: { staleTime: 60_000 } } })
   );
@@ -48,7 +60,7 @@ function RootLayoutNav() {
       <AuthProvider>
         <UserPreferencesProvider>
           <ToastProvider>
-            <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+            <ThemeProvider value={navigationTheme}>
               <Stack>
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                 <Stack.Screen name="(auth)" options={{ headerShown: false }} />
