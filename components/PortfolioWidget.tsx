@@ -33,7 +33,9 @@ export function PortfolioWidget() {
     enabled: !!user,
   });
 
-  const { data: valuations = {} } = useQuery<Record<string, PortfolioValuation | null>>({
+  const { data: valuations = {}, isLoading: valuationsLoading } = useQuery<
+    Record<string, PortfolioValuation | null>
+  >({
     queryKey: ["portfolio-valuations", cards.map((c) => c.id).join(",")],
     queryFn: async () => {
       const results: Record<string, PortfolioValuation | null> = {};
@@ -133,11 +135,36 @@ export function PortfolioWidget() {
         <Text style={{ fontSize: 11, color: palette.textInverseMuted, fontWeight: "600", letterSpacing: 0.4 }}>
           MARKET VALUE
         </Text>
-        <AnimatedNumber
-          value={hasValuations ? totalCurrentValue : totalInvested}
-          formatter={formatCents}
-          style={{ fontSize: 34, fontWeight: "700", color: palette.textInverse, marginTop: 4, letterSpacing: -0.8 }}
-        />
+        {valuationsLoading ? (
+          <Text
+            style={{
+              fontSize: 34,
+              fontWeight: "700",
+              color: palette.textInverseMuted,
+              marginTop: 4,
+              letterSpacing: -0.8,
+            }}
+          >
+            Updating...
+          </Text>
+        ) : (
+          <AnimatedNumber
+            value={hasValuations ? totalCurrentValue : totalInvested}
+            formatter={formatCents}
+            style={{
+              fontSize: 34,
+              fontWeight: "700",
+              color: palette.textInverse,
+              marginTop: 4,
+              letterSpacing: -0.8,
+            }}
+          />
+        )}
+        {!valuationsLoading && !hasValuations && (
+          <Text style={{ fontSize: 11, color: palette.textInverseMuted, marginTop: 4 }}>
+            Showing cost basis until live comps load
+          </Text>
+        )}
         {totalPL !== null && (
           <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6, marginTop: 4 }}>
             <Text style={{ fontSize: 14, fontWeight: "700", color: plColor }}>

@@ -100,6 +100,9 @@ export async function fetchTrending(
   }
 
   try {
+    const dbResults = await fetchTrendingFromDB(sport, yearMin, yearMax);
+    if (dbResults.length > 0) return dbResults;
+
     const { data, error } = await supabase.functions.invoke<TrendingResponse>("trending", {
       body: { sport: sport || undefined, yearMin, yearMax, limit: 20, sortBy: "trend_7d" },
     });
@@ -107,9 +110,6 @@ export async function fetchTrending(
     if (!error && data?.trending?.length) {
       return data.trending;
     }
-
-    const dbResults = await fetchTrendingFromDB(sport, yearMin, yearMax);
-    if (dbResults.length > 0) return dbResults;
 
     const mocks = getMockTrending(sport, yearMin, yearMax);
 

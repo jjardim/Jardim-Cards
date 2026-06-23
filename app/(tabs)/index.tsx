@@ -356,8 +356,11 @@ export default function DashboardScreen() {
               <StatCard
                 label="Avg Move"
                 value={avgTrend !== null ? formatPct(avgTrend) : "\u2014"}
-                trend={avgTrend}
-                subtitle={`${totalVolume.toLocaleString()} sales (7d)`}
+                subtitle={
+                  withTrend.length > 0
+                    ? `${totalVolume.toLocaleString()} comps tracked`
+                    : `${filtered.length} cards \u00b7 building 7d baselines`
+                }
                 accent={palette.successBg}
                 icon={<FontAwesome name="line-chart" size={12} color={palette.success} />}
               />
