@@ -8,7 +8,7 @@ import { WidgetErrorBoundary } from "./WidgetErrorBoundary";
 import { WidgetLockedPlaceholder } from "./WidgetLockedPlaceholder";
 import { WIDGET_COMPONENTS } from "./widget-components";
 
-export function DashboardShell() {
+export function DashboardShell({ resetKey = 0 }: { resetKey?: number }) {
   const { plan } = useDashboardContext();
   const { widgetOrder, isLoading } = useDashboardLayout();
 
@@ -23,19 +23,27 @@ export function DashboardShell() {
   return (
     <View>
       {widgetOrder.map((id) => (
-        <DashboardWidgetSlot key={id} id={id} plan={plan} />
+        <DashboardWidgetSlot key={id} id={id} plan={plan} resetKey={resetKey} />
       ))}
     </View>
   );
 }
 
-function DashboardWidgetSlot({ id, plan }: { id: WidgetId; plan: "free" | "pro" }) {
+function DashboardWidgetSlot({
+  id,
+  plan,
+  resetKey,
+}: {
+  id: WidgetId;
+  plan: "free" | "pro";
+  resetKey: number;
+}) {
   const def = WIDGET_REGISTRY[id];
   const Component = WIDGET_COMPONENTS[id];
   const locked = !canUseWidget(def.tier, plan);
 
   return (
-    <WidgetErrorBoundary title={def.title}>
+    <WidgetErrorBoundary key={`${id}-${resetKey}`} title={def.title}>
       {locked ? (
         <WidgetLockedPlaceholder title={def.title} description={def.description} />
       ) : (

@@ -40,12 +40,13 @@ export function useDashboardLayout() {
     (next: WidgetId[] | ((prev: WidgetId[]) => WidgetId[])) => {
       const resolved = typeof next === "function" ? next(widgetOrder) : next;
       if (user) {
+        queryClient.setQueryData(["dashboard-layout", user.id], { widgetOrder: resolved });
         saveMutation.mutate(resolved);
       } else {
         setGuestOrder(resolved);
       }
     },
-    [user, widgetOrder, saveMutation]
+    [user, widgetOrder, saveMutation, queryClient]
   );
 
   const toggleWidget = useCallback(

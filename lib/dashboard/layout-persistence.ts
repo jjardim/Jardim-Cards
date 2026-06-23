@@ -13,8 +13,7 @@ export async function fetchDashboardLayout(userId: string): Promise<DashboardLay
     return { widgetOrder: DEFAULT_WIDGET_ORDER };
   }
 
-  const saved = data.widget_order.filter(isWidgetId);
-  return { widgetOrder: saved.length > 0 ? saved : DEFAULT_WIDGET_ORDER };
+  return { widgetOrder: data.widget_order.filter(isWidgetId) };
 }
 
 export async function saveDashboardLayout(

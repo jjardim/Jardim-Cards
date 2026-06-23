@@ -21,7 +21,6 @@ import {
 } from "@/lib/dashboard/filters";
 import { useDashboardLayout } from "@/lib/dashboard/use-dashboard-layout";
 import { useDashboardRefresh } from "@/lib/dashboard/use-dashboard-refresh";
-import { useFilteredTrending } from "@/lib/dashboard/use-filtered-trending";
 import { SPORTS } from "@/lib/types";
 import { palette, radius, shadow, getSportTheme } from "@/lib/theme";
 
@@ -68,8 +67,7 @@ function DashboardScreenContent() {
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const { filters, setFilters } = useDashboardContext();
   const { widgetOrder } = useDashboardLayout();
-  const { refresh, refreshing } = useDashboardRefresh(widgetOrder);
-  const { isFetching } = useFilteredTrending();
+  const { refresh, refreshing, resetKey } = useDashboardRefresh(widgetOrder);
 
   const sportTheme = getSportTheme(filters.sport);
 
@@ -86,7 +84,7 @@ function DashboardScreenContent() {
         nestedScrollEnabled
         refreshControl={
           <RefreshControl
-            refreshing={refreshing || isFetching}
+            refreshing={refreshing}
             onRefresh={refresh}
             tintColor={palette.primary}
           />
@@ -287,7 +285,7 @@ function DashboardScreenContent() {
             </View>
           </ScrollView>
 
-          <DashboardShell />
+          <DashboardShell resetKey={resetKey} />
 
           <Text
             style={{

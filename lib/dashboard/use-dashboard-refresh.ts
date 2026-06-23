@@ -8,6 +8,7 @@ export function useDashboardRefresh(enabledWidgetIds: WidgetId[]) {
   const queryClient = useQueryClient();
   const { queryContext } = useDashboardContext();
   const [refreshing, setRefreshing] = useState(false);
+  const [resetKey, setResetKey] = useState(0);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -16,10 +17,11 @@ export function useDashboardRefresh(enabledWidgetIds: WidgetId[]) {
       await Promise.all(
         keys.map((queryKey) => queryClient.invalidateQueries({ queryKey: [...queryKey] }))
       );
+      setResetKey((k) => k + 1);
     } finally {
       setRefreshing(false);
     }
   }, [enabledWidgetIds, queryContext, queryClient]);
 
-  return { refresh, refreshing };
+  return { refresh, refreshing, resetKey };
 }
