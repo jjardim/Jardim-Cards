@@ -151,8 +151,11 @@ export default function ProfileScreen() {
 
       if (data.error) {
         if (data.setup_instructions) {
-          showToast("eBay RuName not configured yet. See console for setup steps.", "error", 6000);
-          console.log("eBay OAuth Setup Instructions:", data.setup_instructions);
+          showToast(data.error, "error", 8000);
+          console.log("eBay OAuth setup:\n", data.setup_instructions);
+          if (data.clientIdSet === false) {
+            console.log("EBAY_CLIENT_ID is missing in Supabase Edge Function secrets.");
+          }
         } else {
           showToast(data.error, "error");
         }

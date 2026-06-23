@@ -5,11 +5,51 @@ const EBAY_CLIENT_ID = Deno.env.get("EBAY_CLIENT_ID") ?? "";
 const EBAY_CLIENT_SECRET = Deno.env.get("EBAY_CLIENT_SECRET") ?? "";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+const EBAY_SANDBOX = (Deno.env.get("EBAY_SANDBOX") ?? "").toLowerCase() === "true";
 
-const EBAY_AUTH_URL = "https://auth.ebay.com/oauth2/authorize";
-const EBAY_TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token";
+const EBAY_AUTH_URL = EBAY_SANDBOX
+  ? "https://auth.sandbox.ebay.com/oauth2/authorize"
+  : "https://auth.ebay.com/oauth2/authorize";
+const EBAY_TOKEN_URL = EBAY_SANDBOX
+  ? "https://api.sandbox.ebay.com/identity/v1/oauth2/token"
+  : "https://api.ebay.com/identity/v1/oauth2/token";
 const EBAY_RUNAME = Deno.env.get("EBAY_RUNAME") ?? "Jason_Jardim-JasonJar-CardTr-parhuho";
 const SCOPES = "https://api.ebay.com/oauth/api_scope";
+
+function oauthConfigStatus() {
+  const clientId = EBAY_CLIENT_ID.trim();
+  const clientSecret = EBAY_CLIENT_SECRET.trim();
+  const runame = EBAY_RUNAME.trim();
+  return {
+    environment: EBAY_SANDBOX ? "sandbox" : "production",
+    clientIdSet: clientId.length > 0,
+    clientSecretSet: clientSecret.length > 0,
+    runameSet: runame.length > 0,
+    clientIdSuffix: clientId.length >= 4 ? clientId.slice(-4) : null,
+    runame,
+    configured: clientId.length > 0 && clientSecret.length > 0 && runame.length > 0,
+  };
+}
+
+function oauthConfigError(): string | null {
+  const status = oauthConfigStatus();
+  if (!status.clientIdSet || !status.clientSecretSet) {
+    return "eBay OAuth is not configured on the server (missing EBAY_CLIENT_ID or EBAY_CLIENT_SECRET in Supabase Edge Function secrets).";
+  }
+  if (!status.runameSet) {
+    return "eBay RuName is not configured (set EBAY_RUNAME in Supabase Edge Function secrets).";
+  }
+  return null;
+}
+
+const EBAY_OAUTH_SETUP = [
+  "1. developer.ebay.com → Your App → Application Keys → Production",
+  "2. Copy App ID → Supabase secret EBAY_CLIENT_ID",
+  "3. Copy Cert ID → Supabase secret EBAY_CLIENT_SECRET",
+  "4. User Tokens → Get a Token from eBay → copy RuName → EBAY_RUNAME",
+  "5. RuName Auth Accepted URL must point to your ebay-auth-callback function",
+  "6. Redeploy ebay-auth + ebay-auth-callback after updating secrets",
+].join("\n");
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -106,6 +146,18 @@ Deno.serve(async (req: Request) => {
         appReturnUrl?: string;
       };
 
+      if (action === "check_oauth_config") {
+        const configError = oauthConfigError();
+        return new Response(
+          JSON.stringify({
+            ...oauthConfigStatus(),
+            error: configError,
+            setup_instructions: configError ? EBAY_OAUTH_SETUP : null,
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
       if (action === "get_consent_url") {
         if (!supabaseToken) {
           return new Response(JSON.stringify({ error: "supabaseToken required" }), {
@@ -114,14 +166,29 @@ Deno.serve(async (req: Request) => {
           });
         }
 
+        const configError = oauthConfigError();
+        if (configError) {
+          return new Response(
+            JSON.stringify({
+              error: configError,
+              setup_instructions: EBAY_OAUTH_SETUP,
+              ...oauthConfigStatus(),
+            }),
+            {
+              status: 503,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            }
+          );
+        }
+
         const state = btoa(JSON.stringify({
           token: supabaseToken,
           returnUrl: appReturnUrl ?? "",
         }));
 
-        const consentUrl = `${EBAY_AUTH_URL}?client_id=${encodeURIComponent(EBAY_CLIENT_ID)}&redirect_uri=${encodeURIComponent(EBAY_RUNAME)}&response_type=code&scope=${encodeURIComponent(SCOPES)}&state=${encodeURIComponent(state)}`;
+        const consentUrl = `${EBAY_AUTH_URL}?client_id=${encodeURIComponent(EBAY_CLIENT_ID.trim())}&redirect_uri=${encodeURIComponent(EBAY_RUNAME.trim())}&response_type=code&scope=${encodeURIComponent(SCOPES)}&state=${encodeURIComponent(state)}`;
 
-        return new Response(JSON.stringify({ consentUrl }), {
+        return new Response(JSON.stringify({ consentUrl, ...oauthConfigStatus() }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
