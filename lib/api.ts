@@ -25,6 +25,8 @@ import {
   type CardValuationInput,
   type ValuationFetchOptions,
   hasRequestedGrade,
+  looksLikeDirtyPlayerName,
+  needsMetadataBackfill,
   normalizePlayerNameForSearch,
   resolveCardGrade,
   toValuationInput,
@@ -906,9 +908,10 @@ export async function fetchPortfolioValuation(
   options?: ValuationFetchOptions
 ): Promise<PortfolioValuation | null> {
   const forceRefresh = options?.forceRefresh ?? false;
+  const backfilled = await maybeBackfillValuationInput(card);
   const input: CardValuationInput = {
-    ...card,
-    grade: resolveCardGrade({ grade: card.grade, ebay_title: card.ebay_title }),
+    ...backfilled,
+    grade: resolveCardGrade({ grade: backfilled.grade, ebay_title: backfilled.ebay_title }),
   };
 
   const query = buildValuationQuery(input);
@@ -1537,7 +1540,7 @@ export function buildSearchKey(
  * Fixes dirty OCR/eBay parser output (e.g. "TIFFANY - Mark McGwire 366").
  */
 export async function enrichCardMetadata<T extends AddWatchlistCardInput>(input: T): Promise<T> {
-  if (input.pricecharting_id) return input;
+  if (input.pricecharting_id && !looksLikeDirtyPlayerName(input.player_name)) return input;
 
   const canonical = await lookupCanonicalCard(input);
   if (!canonical) return input;
@@ -1550,6 +1553,70 @@ export async function enrichCardMetadata<T extends AddWatchlistCardInput>(input:
     card_number: canonical.cardNumber ?? input.card_number,
     sport: canonical.sport,
     pricecharting_id: canonical.pricechartingId,
+  };
+}
+
+/** Backfill dirty/missing canonical metadata on existing portfolio/watchlist rows. */
+async function maybeBackfillValuationInput(card: CardValuationInput): Promise<CardValuationInput> {
+  if (USE_MOCK || !card.id || !card.metadataTable || !needsMetadataBackfill(card)) {
+    return card;
+  }
+
+  const enriched = await enrichCardMetadata({
+    player_name: card.player_name,
+    set_name: card.set_name ?? null,
+    year: card.year ?? null,
+    card_number: card.card_number ?? null,
+    grade: card.grade ?? null,
+    ebay_title: card.ebay_title ?? null,
+    pricecharting_id: card.pricecharting_id ?? null,
+  });
+
+  const canonicalPlayer = normalizePlayerNameForSearch(enriched.player_name);
+  const changed =
+    canonicalPlayer !== normalizePlayerNameForSearch(card.player_name) ||
+    (enriched.set_name ?? null) !== (card.set_name ?? null) ||
+    (enriched.year ?? null) !== (card.year ?? null) ||
+    (enriched.card_number ?? null) !== (card.card_number ?? null) ||
+    (enriched.pricecharting_id ?? null) !== (card.pricecharting_id ?? null);
+
+  if (!changed) return card;
+
+  const searchKey = buildSearchKey(enriched.player_name, enriched.set_name, enriched.year);
+  const payload = {
+    player_name: enriched.player_name,
+    set_name: enriched.set_name ?? null,
+    year: enriched.year ?? null,
+    card_number: enriched.card_number ?? null,
+    pricecharting_id: enriched.pricecharting_id ?? null,
+    search_key: searchKey || null,
+  };
+
+  if (card.metadataTable === "portfolio_cards") {
+    const cardName = [
+      enriched.year,
+      enriched.set_name,
+      enriched.player_name,
+      enriched.card_number ? `#${enriched.card_number}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    supabase
+      .from("portfolio_cards")
+      .update({ ...payload, card_name: cardName })
+      .eq("id", card.id)
+      .then(() => {});
+  } else {
+    supabase.from("watchlist_cards").update(payload).eq("id", card.id).then(() => {});
+  }
+
+  return {
+    ...card,
+    player_name: canonicalPlayer,
+    set_name: enriched.set_name ?? card.set_name,
+    year: enriched.year ?? card.year,
+    card_number: enriched.card_number ?? card.card_number,
+    pricecharting_id: enriched.pricecharting_id ?? card.pricecharting_id,
   };
 }
 
@@ -1761,5 +1828,5 @@ export async function fetchWatchlistValuation(
       .then(() => {});
   }
 
-  return fetchPortfolioValuation(toValuationInput(card));
+  return fetchPortfolioValuation(toValuationInput(card, "watchlist_cards"));
 }

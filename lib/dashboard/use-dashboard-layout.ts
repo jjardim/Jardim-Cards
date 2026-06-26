@@ -7,12 +7,13 @@ import {
   saveDashboardLayout,
 } from "./layout-persistence";
 import { DEFAULT_WIDGET_ORDER } from "./registry";
+import { loadGuestDashboardLayout, saveGuestDashboardLayout } from "./guest-layout-storage";
 import type { WidgetId } from "./types";
 
 export function useDashboardLayout() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const [guestOrder, setGuestOrder] = useState<WidgetId[]>(DEFAULT_WIDGET_ORDER);
+  const [guestOrder, setGuestOrder] = useState<WidgetId[]>(loadGuestDashboardLayout);
 
   const { data: layout, isLoading } = useQuery({
     queryKey: ["dashboard-layout", user?.id],
@@ -44,6 +45,7 @@ export function useDashboardLayout() {
         saveMutation.mutate(resolved);
       } else {
         setGuestOrder(resolved);
+        saveGuestDashboardLayout(resolved);
       }
     },
     [user, widgetOrder, saveMutation, queryClient]
@@ -62,21 +64,6 @@ export function useDashboardLayout() {
     [setWidgetOrder]
   );
 
-  const moveWidget = useCallback(
-    (id: WidgetId, direction: "up" | "down") => {
-      setWidgetOrder((prev) => {
-        const index = prev.indexOf(id);
-        if (index < 0) return prev;
-        const target = direction === "up" ? index - 1 : index + 1;
-        if (target < 0 || target >= prev.length) return prev;
-        const next = [...prev];
-        [next[index], next[target]] = [next[target], next[index]];
-        return next;
-      });
-    },
-    [setWidgetOrder]
-  );
-
   const resetLayout = useCallback(() => {
     setWidgetOrder(DEFAULT_WIDGET_ORDER);
   }, [setWidgetOrder]);
@@ -87,9 +74,9 @@ export function useDashboardLayout() {
       isLoading,
       isSaving: saveMutation.isPending,
       toggleWidget,
-      moveWidget,
+      setWidgetOrder,
       resetLayout,
     }),
-    [widgetOrder, isLoading, saveMutation.isPending, toggleWidget, moveWidget, resetLayout]
+    [widgetOrder, isLoading, saveMutation.isPending, toggleWidget, setWidgetOrder, resetLayout]
   );
 }

@@ -55,20 +55,25 @@ interface SoldListingRow {
   sold_date: string;
 }
 
+/**
+ * Mirrors `resolveGradeTierPrice` in lib/pricing/comp-match.ts — graded tiers
+ * never silently fall back to raw when the tier price is missing.
+ */
 function pickPriceForGrade(prices: PCPrices, grade: string): number | null {
   const g = (grade || "").trim();
-  if (!g) return prices.rawCents;
-  if (/psa\s*10/i.test(g)) return prices.psa10Cents ?? prices.rawCents;
-  if (/psa\s*9(?!\.5)/i.test(g)) return prices.psa9Cents ?? prices.rawCents;
-  if (/psa\s*8/i.test(g)) return prices.psa8Cents ?? prices.rawCents;
-  if (/psa\s*7/i.test(g)) return prices.psa7Cents ?? prices.rawCents;
-  if (/bgs\s*10/i.test(g)) return prices.bgs10Cents ?? prices.psa10Cents ?? prices.rawCents;
-  if (/bgs\s*9\.?5/i.test(g)) return prices.bgs95Cents ?? prices.psa9Cents ?? prices.rawCents;
-  if (/bgs\s*9(?!\.)/i.test(g)) return prices.psa9Cents ?? prices.rawCents;
-  if (/sgc\s*10/i.test(g)) return prices.sgc10Cents ?? prices.psa10Cents ?? prices.rawCents;
-  if (/cgc\s*10/i.test(g)) return prices.cgc10Cents ?? prices.psa10Cents ?? prices.rawCents;
-  if (/raw|ungraded/i.test(g)) return prices.rawCents;
-  return prices.rawCents;
+  if (!g || /raw|ungraded/i.test(g)) return prices.rawCents;
+
+  if (/psa\s*10/i.test(g)) return prices.psa10Cents;
+  if (/psa\s*9(?!\.5)/i.test(g)) return prices.psa9Cents;
+  if (/psa\s*8/i.test(g)) return prices.psa8Cents;
+  if (/psa\s*7/i.test(g)) return prices.psa7Cents;
+  if (/bgs\s*10/i.test(g)) return prices.bgs10Cents ?? prices.psa10Cents;
+  if (/bgs\s*9\.?5/i.test(g)) return prices.bgs95Cents ?? prices.psa9Cents;
+  if (/bgs\s*9(?!\.)/i.test(g)) return prices.psa9Cents;
+  if (/sgc\s*10/i.test(g)) return prices.sgc10Cents ?? prices.psa10Cents;
+  if (/cgc\s*10/i.test(g)) return prices.cgc10Cents ?? prices.psa10Cents;
+
+  return null;
 }
 
 async function fetchPriceChartingProduct(pricechartingId: string): Promise<PCProduct | null> {

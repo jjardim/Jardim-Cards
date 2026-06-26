@@ -764,7 +764,7 @@ export default function PortfolioScreen() {
       await Promise.all(
         cards.map(async (card) => {
           try {
-            const val = await fetchPortfolioValuation(toValuationInput(card), {
+            const val = await fetchPortfolioValuation(toValuationInput(card, "portfolio_cards"), {
               forceRefresh: true,
             });
             results[card.id] = val;

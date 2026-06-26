@@ -11,6 +11,8 @@ type ValuationGradeCheck = {
   usedRawFallback: boolean;
 };
 
+export type MetadataTable = "portfolio_cards" | "watchlist_cards";
+
 export interface CardValuationInput {
   player_name: string;
   set_name?: string | null;
@@ -21,6 +23,8 @@ export interface CardValuationInput {
   ebay_title?: string | null;
   id?: string;
   pricecharting_id?: string | null;
+  /** When set with `id`, canonical metadata fixes are persisted to this table. */
+  metadataTable?: MetadataTable;
 }
 
 export interface ValuationFetchOptions {
@@ -72,8 +76,28 @@ export function valuationHonorsGrade(
   return true;
 }
 
+/** Dirty OCR/eBay parser output — e.g. "TIFFANY - Mark McGwire 366". */
+export function looksLikeDirtyPlayerName(playerName: string): boolean {
+  const trimmed = playerName.trim();
+  if (/^\w[\w\s]*\s*-\s*/i.test(trimmed)) return true;
+  if (/\s#\d+|\s\d{1,4}$/.test(trimmed) && trimmed.split(/\s+/).length > 2) return true;
+  return false;
+}
+
+/** Rows missing PC id or with parser junk in player_name should be re-enriched. */
+export function needsMetadataBackfill(input: {
+  pricecharting_id?: string | null;
+  player_name: string;
+}): boolean {
+  if (!input.pricecharting_id?.trim()) return true;
+  return looksLikeDirtyPlayerName(input.player_name);
+}
+
 /** Map any portfolio/watchlist row → unified valuation fetch input. */
-export function toValuationInput(card: ValuationCardSource): CardValuationInput {
+export function toValuationInput(
+  card: ValuationCardSource,
+  metadataTable?: MetadataTable
+): CardValuationInput {
   return {
     player_name: normalizePlayerNameForSearch(card.player_name),
     set_name: card.set_name,
@@ -84,5 +108,6 @@ export function toValuationInput(card: ValuationCardSource): CardValuationInput 
     ebay_title: card.ebay_title,
     id: card.id,
     pricecharting_id: card.pricecharting_id,
+    metadataTable,
   };
 }

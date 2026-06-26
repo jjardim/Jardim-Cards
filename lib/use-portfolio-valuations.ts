@@ -20,7 +20,7 @@ export function usePortfolioValuations(cards: PortfolioCard[], userId: string | 
       const results: Record<string, PortfolioValuation | null> = {};
       await Promise.all(
         cards.map(async (card) => {
-          results[card.id] = await fetchPortfolioValuation(toValuationInput(card));
+          results[card.id] = await fetchPortfolioValuation(toValuationInput(card, "portfolio_cards"));
         })
       );
       if (userId) persistValuations(userId, cardIdsKey, results);

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -15,6 +15,7 @@ import {
   DashboardProvider,
   useDashboardContext,
 } from "@/lib/dashboard/dashboard-context";
+import { getActiveDashboardFilters } from "@/lib/dashboard/active-filters";
 import {
   DASHBOARD_ERAS,
   DASHBOARD_PRICE_TIERS,
@@ -68,8 +69,18 @@ function DashboardScreenContent() {
   const { filters, setFilters } = useDashboardContext();
   const { widgetOrder } = useDashboardLayout();
   const { refresh, refreshing, resetKey } = useDashboardRefresh(widgetOrder);
+  const activeFilters = useMemo(() => getActiveDashboardFilters(widgetOrder), [widgetOrder]);
 
   const sportTheme = getSportTheme(filters.sport);
+
+  const filterFooterHint = useMemo(() => {
+    if (!activeFilters.any) return "Pull down to refresh your widgets";
+    const parts: string[] = [];
+    if (activeFilters.sport) parts.push(sportTheme.label || "category");
+    if (activeFilters.era) parts.push("era");
+    if (activeFilters.priceTier) parts.push("price");
+    return `Pull down to refresh · ${parts.join(" · ")} filters apply to market widgets`;
+  }, [activeFilters, sportTheme.label]);
 
   const handleSearch = () => {
     const q = searchText.trim();
@@ -124,6 +135,7 @@ function DashboardScreenContent() {
             <View style={{ flexDirection: "row", gap: 8 }}>
               <TouchableOpacity
                 onPress={() => setCustomizeOpen(true)}
+                accessibilityLabel="Customize home"
                 activeOpacity={0.7}
                 style={{
                   width: 44,
@@ -154,29 +166,6 @@ function DashboardScreenContent() {
               </TouchableOpacity>
             </View>
           </View>
-
-          <TouchableOpacity
-            onPress={() => router.push("/m3-home")}
-            activeOpacity={0.7}
-            style={{
-              alignSelf: "flex-start",
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 6,
-              marginTop: 12,
-              paddingHorizontal: 12,
-              paddingVertical: 6,
-              borderRadius: radius.pill,
-              backgroundColor: palette.purpleBg,
-            }}
-          >
-            <Text style={{ fontSize: 11 }}>{"\u2728"}</Text>
-            <Text
-              style={{ fontSize: 11, fontWeight: "700", color: palette.purple, letterSpacing: 0.3 }}
-            >
-              TRY M3 EXPRESSIVE PREVIEW
-            </Text>
-          </TouchableOpacity>
 
           <View
             style={{
@@ -215,6 +204,7 @@ function DashboardScreenContent() {
             )}
           </View>
 
+          {activeFilters.sport && (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 16 }}>
             <View style={{ flexDirection: "row", gap: 8 }}>
               {[
@@ -257,7 +247,9 @@ function DashboardScreenContent() {
               })}
             </View>
           </ScrollView>
+          )}
 
+          {activeFilters.era && (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
             <View style={{ flexDirection: "row", gap: 6 }}>
               {DASHBOARD_ERAS.map((e, i) => (
@@ -270,7 +262,9 @@ function DashboardScreenContent() {
               ))}
             </View>
           </ScrollView>
+          )}
 
+          {activeFilters.priceTier && (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
             <View style={{ flexDirection: "row", gap: 6 }}>
               {DASHBOARD_PRICE_TIERS.map((t, i) => (
@@ -284,8 +278,9 @@ function DashboardScreenContent() {
               ))}
             </View>
           </ScrollView>
+          )}
 
-          <DashboardShell resetKey={resetKey} />
+          <DashboardShell resetKey={resetKey} onCustomize={() => setCustomizeOpen(true)} />
 
           <Text
             style={{
@@ -296,7 +291,7 @@ function DashboardScreenContent() {
               marginBottom: 8,
             }}
           >
-            Pull down to refresh · {sportTheme.label} filters apply to market widgets
+            {filterFooterHint}
           </Text>
           <Text
             style={{

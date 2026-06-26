@@ -4,11 +4,17 @@ import { canUseWidget, WIDGET_REGISTRY } from "@/lib/dashboard/registry";
 import type { WidgetId } from "@/lib/dashboard/types";
 import { useDashboardLayout } from "@/lib/dashboard/use-dashboard-layout";
 import { palette } from "@/lib/theme";
+import { DashboardEmptyState } from "./DashboardEmptyState";
 import { WidgetErrorBoundary } from "./WidgetErrorBoundary";
 import { WidgetLockedPlaceholder } from "./WidgetLockedPlaceholder";
 import { WIDGET_COMPONENTS } from "./widget-components";
 
-export function DashboardShell({ resetKey = 0 }: { resetKey?: number }) {
+interface DashboardShellProps {
+  resetKey?: number;
+  onCustomize?: () => void;
+}
+
+export function DashboardShell({ resetKey = 0, onCustomize }: DashboardShellProps) {
   const { plan } = useDashboardContext();
   const { widgetOrder, isLoading } = useDashboardLayout();
 
@@ -18,6 +24,10 @@ export function DashboardShell({ resetKey = 0 }: { resetKey?: number }) {
         <ActivityIndicator color={palette.primary} />
       </View>
     );
+  }
+
+  if (widgetOrder.length === 0) {
+    return onCustomize ? <DashboardEmptyState onCustomize={onCustomize} /> : null;
   }
 
   return (
